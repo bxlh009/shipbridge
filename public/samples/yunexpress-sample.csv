@@ -1,0 +1,6 @@
+运单号,收件人,邮编,国家,城市,品名,数量,客户单号,物流商
+YT202611110001,Emily Carter,10001,美国,New York,Silicone Phone Case,2,INV-1001,云途
+YT202611110002,James Whitaker,SW1A 1AA,英国,London,LED Desk Lamp,1,INV-1002,YunExpress
+YT202611110003,Micheal Obrien,90210,美国,Beverly Hills,Yoga Mat,1,INV-1003,云途
+YT202611110004,Anna Schmidt,10117,德国,Berlin,Ceramic Mug Set,1,INV-1004,YunExpress
+YT202611119999,Noah Bennett,3000,澳大利亚,Melbourne,Hiking Socks,3,INV-ORPHAN,云途

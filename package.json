@@ -1,0 +1,43 @@
+{
+  "name": "shipbridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ShipBridge — match Chinese carrier manifests to PayPal orders and sync tracking in bulk.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run",
+    "verify": "node scripts/verify.mjs",
+    "seed": "tsx scripts/seed-sandbox.ts",
+    "capture": "tsx scripts/capture.ts",
+    "samples": "node scripts/generate-samples.mjs"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^1.0.0",
+    "@paypal/agent-toolkit": "^1.11.0",
+    "ag-grid-community": "^33.0.0",
+    "ag-grid-react": "^33.0.0",
+    "ai": "^5.0.0",
+    "next": "^15.5.0",
+    "papaparse": "^5.5.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "xlsx": "^0.18.5",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^24.0.0",
+    "@types/papaparse": "^5.3.15",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "playwright": "^1.55.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^4.1.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
