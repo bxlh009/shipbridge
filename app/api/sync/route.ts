@@ -24,6 +24,7 @@ export async function POST(request: Request) {
       orders,
       stats,
       verified: synced.rows.filter((row) => row.syncStatus === "verified").length,
+      carrierResults: synced.carrierResults,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sync failed";

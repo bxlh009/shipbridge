@@ -94,7 +94,7 @@ Carrier codes live in one module, `lib/carriers.ts`, with comments pointing at P
 | --- | --- |
 | OAuth | `POST /v1/oauth2/token` with `client_credentials` (cached) |
 | Create demo orders | `POST /v2/checkout/orders` intent `CAPTURE` |
-| Capture after buyer approval | `POST /v2/checkout/orders/{id}/capture` |
+| Capture | `POST /v2/checkout/orders/{id}/capture` after `payment_source.card`, or after the buyer approves a wallet link |
 | Add tracking | `POST /v2/checkout/orders/{id}/track` with `capture_id`, `tracking_number`, `carrier`, optional `carrier_name_other`, `notify_payer: false` |
 | Fallback batch | `POST /v1/shipping/trackers-batch` |
 | Read back | `GET /v2/checkout/orders/{id}` and `GET /v1/shipping/trackers/{captureId}-{trackingNumber}` |
@@ -118,6 +118,8 @@ PAYPAL_MODE=mock npm run start
 
 Open http://localhost:3000. The app runs with an empty `.env`. Mock mode is selected when `PAYPAL_MODE=mock` or when `PAYPAL_CLIENT_ID` is missing.
 
+`next dev` and `next start` load env files with `@next/env`. A variable that is already set in the process environment is kept. `.env.local` does not override it, and `.env.local` wins over `.env` for keys that are still unset. Checked with `loadEnvConfig`: a shell `PAYPAL_MODE` stayed at the shell value while unset keys came from `.env.local`. The same server, started as `PAYPAL_MODE=mock npm run start` while `.env.local` contained `PAYPAL_MODE=sandbox`, reported `PayPal: mock` from `GET /api/health`.
+
 ### Mock demo
 
 1. The header chips should read `PayPal: mock` and `AI: off (rules)`.
@@ -132,26 +134,40 @@ The same three actions are the hero steps: **Load sample → Match → Sync**. T
 
 ### Sandbox
 
-```bash
-PAYPAL_MODE=sandbox
-PAYPAL_ENV=sandbox
-PAYPAL_CLIENT_ID=your_sandbox_client_id
-PAYPAL_CLIENT_SECRET=your_sandbox_secret
-```
+Put the sandbox REST app in `.env.local` (gitignored, mode `600`). Do not commit it. `PAYPAL_MODE=sandbox`, `PAYPAL_ENV=sandbox`, `PAYPAL_CLIENT_ID`, and `PAYPAL_CLIENT_SECRET` are enough. The seed script reads that file itself and only fills keys that are not already in the process environment, so it does not print the file.
+
+Advanced Card Payments must be enabled on the app. This repo does not call Transaction Search (`/v1/reporting/transactions`) or the disputes API. Seeded order ids are kept locally instead.
 
 ```bash
 npx tsx scripts/seed-sandbox.ts
 ```
 
-The script creates one `CAPTURE` order per SAMPLE buyer and prints an approve link. Log in as the sandbox **personal** buyer and approve each order. Then:
+The script creates one USD `CAPTURE` order per catalog buyer (SB-1001 through SB-1010). `invoice_id` and `custom_id` are the manifest reference (`INV-1001`, and so on). The shipping name and address match the sample rows. Anna Schmidt’s PayPal postcode is `10115` (the manifest says `10117`). Noah Bennett has no order. Ava Thompson (`INV-1010`) has an order and no manifest row.
+
+Payment is `payment_source.card` with a PayPal sandbox test card. The first card tried is Visa `4032039317984658`, then `4012000033330026`, `4005519200000004`, and `4012888888881881` if needed. Expiry is `2030-12` and the CVV is `123`. Billing is a US sandbox address so the test card can capture without 3-D Secure. The buyer’s ship-to address stays on the purchase unit. Create and capture send `PayPal-Request-Id`. A completed order is stored and skipped on the next run.
+
+The mapping `{ invoice id → order id, capture id, buyer, address }` is written to `.data/sandbox-orders.json` (gitignored). `GET /api/orders` loads those ids with `GET /v2/checkout/orders/{id}`.
+
+If every card attempt fails, the script prints PayPal approve links (not credentials), writes them under `## Browser approvals needed` in `STATUS.md`, and leaves the order ids in the registry. Finish those with:
 
 ```bash
-npx tsx scripts/capture.ts <orderId> <orderId> ...
+npx tsx scripts/capture.ts
 ```
 
-Created ids are stored in `data/sandbox-orders.json` (gitignored). `GET /api/orders` loads those ids. `POST /api/seed` in sandbox mode creates the same set again. Captured orders can then be matched and synced through Orders v2.
+With no ids, `capture.ts` captures registry orders that do not have a capture id yet.
 
-In mock mode the seed script only prints the fixed catalog and does not call PayPal. The running app does not keep a server-side mock store.
+Then build and run the app in sandbox mode. Because `next start` loads `.env.local`, you do not set `PAYPAL_MODE` in the shell:
+
+```bash
+npm run build
+npm run start -- -p 3001
+SHIPBRIDGE_URL=http://127.0.0.1:3001 node scripts/verify-sandbox.mjs
+SHIPBRIDGE_URL=http://127.0.0.1:3001 node scripts/screenshot.mjs --sandbox
+```
+
+`scripts/verify-sandbox.mjs` prints `PASS` or `FAIL` per step and per order: list orders, parse the sample manifests, match, sync, and read back. Anna Schmidt must be flagged red and skipped when nothing is checked. Sync calls Orders v2 `POST /v2/checkout/orders/{id}/track`. If PayPal rejects the carrier code, the server retries that order as `OTHER` plus `carrier_name_other` and the script prints which code was rejected. Read-back is `GET /v2/checkout/orders/{id}` (`purchase_units[].shipping.trackers`, or the v1 tracker when the number is only there). A redacted copy of the script output is written to `sandbox-run.log`.
+
+`POST /api/seed` in sandbox mode does not create new charges. It lists the registry. In mock mode the seed script only prints the fixed catalog and does not call PayPal. The running app does not keep a server-side mock store.
 
 ### Environment
 
@@ -172,12 +188,13 @@ In mock mode the seed script only prints the fixed catalog and does not call Pay
 
 ```bash
 npm test
+npm run build
 PAYPAL_MODE=mock npm run start
 node scripts/verify.mjs
 node scripts/screenshot.mjs
 ```
 
-`scripts/verify.mjs` expects the app on port 3000 and prints `PASS` / `FAIL` lines. Screenshots land in `screenshots/`.
+`PAYPAL_MODE=mock` has to be in the shell when `.env.local` selects sandbox. Process env wins, which is what keeps this run in mock mode. `scripts/verify.mjs` expects the app on port 3000 and prints `PASS` / `FAIL` lines. Screenshots land in `screenshots/`. The after-sync shot waits until the count-up sets `data-settled="true"` and the releasing-early figure matches the `$0.00 → …` line.
 
 Regenerate the 4PX workbook with `npm run samples` after editing `scripts/generate-samples.mjs`.
 
@@ -206,7 +223,7 @@ The timeline in the buyer reply is the same kind of estimate. It is labeled simu
 ## Limitations and roadmap
 
 - Holds and transit times are simulated. Sandbox webhooks will not fire a real release.
-- Mock orders and trackers live in the browser (`localStorage` key `shipbridge-mock-orders`). The server seeds them from `lib/paypal/catalog.ts` and does not remember them between requests, so a Vercel cold start does not wipe the demo. **Reset demo** clears the browser copy. Sandbox orders live at PayPal; their ids are listed in `data/sandbox-orders.json` on the machine that ran the seed script.
+- Mock orders and trackers live in the browser (`localStorage` key `shipbridge-mock-orders`). The server seeds them from `lib/paypal/catalog.ts` and does not remember them between requests, so a Vercel cold start does not wipe the demo. **Reset demo** clears the browser copy. Sandbox orders live at PayPal; their ids are listed in `.data/sandbox-orders.json` on the machine that ran the seed script. Transaction Search is not required.
 - The buyer timeline is not fetched from YunExpress, 4PX, or Yanwen.
 - Vision extraction and fuzzy-match explanations need `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL`. Without them, parsing falls back to spreadsheets and replies fall back to templates.
 - Dispute evidence packs and carrier delivery webhooks are not in this build.

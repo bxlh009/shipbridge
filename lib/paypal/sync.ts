@@ -6,10 +6,23 @@ import { coerceMockState } from "./mock-state";
 
 const AUTO_CONFIDENCE = 70;
 
+export type CarrierResult = {
+  invoiceId: string;
+  orderId: string;
+  trackingNumber: string;
+  requested: string;
+  used: string;
+  fallback: boolean;
+  via: string;
+  rejection?: string;
+  error?: string;
+};
+
 export type SyncResult = {
   rows: GridRow[];
   orders: Order[] | null;
   stats: HoldStats | null;
+  carrierResults: CarrierResult[];
 };
 
 export async function syncRows(rows: GridRow[], clientOrders?: Order[] | null): Promise<SyncResult> {
@@ -17,11 +30,16 @@ export async function syncRows(rows: GridRow[], clientOrders?: Order[] | null): 
   let state = mock ? coerceMockState(clientOrders && clientOrders.length ? { orders: clientOrders } : undefined) : null;
   const liveOrders = state ? null : await paypal.listOrders();
   const results: GridRow[] = [];
+  const carrierResults: CarrierResult[] = [];
   const anySelected = rows.some((row) => row.selected);
 
   for (const row of rows) {
     const orders = state ? state.orders : liveOrders || [];
-    const order = orders.find((item) => item.id === row.matchedOrderId);
+    let order: Order | null | undefined = orders.find((item) => item.id === row.matchedOrderId);
+    if (!order && !mock && row.matchedOrderId) {
+      order = await paypal.getOrder(row.matchedOrderId);
+      if (order && liveOrders && !liveOrders.some((item) => item.id === order?.id)) liveOrders.push(order);
+    }
     if (!row.matchedOrderId || !order) {
       results.push({ ...row, syncStatus: row.trackingNumber ? "skipped" : "idle", syncMessage: row.matchedOrderId ? "Order not found" : "No matched order" });
       continue;
@@ -66,6 +84,20 @@ export async function syncRows(rows: GridRow[], clientOrders?: Order[] | null): 
       );
       if (tracked.state) state = tracked.state;
       const written = tracked.result;
+      const requestedCarrier = written.carrierRequested || row.paypalCarrier || row.carrier;
+      const used = written.carrierUsed || requestedCarrier;
+      const carrierNote = written.carrierFallback ? `${requestedCarrier} rejected, used OTHER` : used;
+      carrierResults.push({
+        invoiceId: order.invoiceId,
+        orderId: order.id,
+        trackingNumber: row.trackingNumber,
+        requested: requestedCarrier,
+        used,
+        fallback: written.carrierFallback === true,
+        via: written.via,
+        rejection: written.rejection,
+        error: written.ok ? undefined : written.error,
+      });
       if (!written.ok) {
         results.push({ ...row, addressRisk, syncStatus: "failed", syncMessage: written.error || "PayPal rejected the tracker" });
         continue;
@@ -76,14 +108,14 @@ export async function syncRows(rows: GridRow[], clientOrders?: Order[] | null): 
           addressRisk,
           addressWarning: addressRisk ? SELLER_PROTECTION_WARNING : "",
           syncStatus: "verified",
-          syncMessage: "verified in PayPal",
+          syncMessage: `verified in PayPal (${carrierNote})`,
         });
       } else {
         results.push({
           ...row,
           addressRisk,
           syncStatus: "unverified",
-          syncMessage: `Wrote via ${written.via}, but read-back did not contain ${row.trackingNumber}`,
+          syncMessage: `Wrote via ${written.via} (${carrierNote}), but read-back did not contain ${row.trackingNumber}`,
         });
       }
     } catch (error) {
@@ -93,5 +125,5 @@ export async function syncRows(rows: GridRow[], clientOrders?: Order[] | null): 
   }
 
   const orders = state ? state.orders : null;
-  return { rows: results, orders, stats: orders ? summarizeHolds(orders) : null };
+  return { rows: results, orders, stats: orders ? summarizeHolds(orders) : null, carrierResults };
 }

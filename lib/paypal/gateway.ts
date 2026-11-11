@@ -1,4 +1,4 @@
-import { mapCarrier } from "../carriers";
+import { canonicalCarrierName, mapCarrier } from "../carriers";
 import type { Order, TrackingRecord } from "../types";
 import {
   addPaypalTracking,
@@ -11,7 +11,16 @@ import {
 import { applyMockTrack, findMockOrder, mockTrackingPresent, seedMockState, type MockState } from "./mock-state";
 import { paypalMode, type PaypalMode } from "./mode";
 
-export type AddTrackingResult = { ok: boolean; via: string; error?: string; verified: boolean };
+export type AddTrackingResult = {
+  ok: boolean;
+  via: string;
+  error?: string;
+  verified: boolean;
+  carrierRequested?: string;
+  carrierUsed?: string;
+  carrierFallback?: boolean;
+  rejection?: string;
+};
 
 const KNOWN = new Set(["YUNEXPRESS", "FOUR_PX_EXPRESS", "YANWEN", "CN_CHINA_POST_EMS", "DHL", "UPS", "FEDEX", "USPS", "OTHER"]);
 
@@ -37,18 +46,26 @@ async function addAndReadLive(input: TrackingWrite): Promise<AddTrackingResult> 
     return { ok: false, via: "orders_v2", error: "Order is not captured yet. Approve and capture it in the sandbox first.", verified: false };
   }
   const written = await addPaypalTracking(input);
-  if (!written.ok) return { ...written, verified: false };
   const verified = await readBackPaypalTracking(input.orderId, input.captureId, input.trackingNumber);
   const record: TrackingRecord = {
     trackingNumber: input.trackingNumber,
-    carrier: input.carrier,
-    carrierNameOther: input.carrierNameOther,
+    carrier: written.carrierUsed || input.carrier,
+    carrierNameOther: written.carrierUsed === "OTHER" ? canonicalCarrierName(input.carrier, input.carrierNameOther) : input.carrierNameOther,
     status: "SHIPPED",
     verified,
     via: written.via,
   };
   if (verified) rememberLiveTracking(input.orderId, record);
-  return { ok: true, via: written.via, verified };
+  if (!written.ok && !verified) return { ...written, verified: false };
+  return {
+    ok: true,
+    via: written.via,
+    verified,
+    carrierRequested: written.carrierRequested,
+    carrierUsed: written.carrierUsed,
+    carrierFallback: written.carrierFallback,
+    rejection: written.rejection,
+  };
 }
 
 /**

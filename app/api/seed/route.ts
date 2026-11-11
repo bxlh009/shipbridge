@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { summarizeHolds } from "@/lib/holds";
-import { CATALOG, freshOrders } from "@/lib/paypal/catalog";
+import { freshOrders } from "@/lib/paypal/catalog";
+import { paypal } from "@/lib/paypal/gateway";
 import { paypalMode } from "@/lib/paypal/mode";
-import { createSandboxOrder } from "@/lib/paypal/rest";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -13,15 +13,14 @@ export async function POST() {
     return NextResponse.json({ ok: true, mode: "mock", orders, stats: summarizeHolds(orders), source: "catalog" });
   }
   try {
-    const created = [];
-    for (const template of CATALOG) {
-      created.push({ localId: template.id, ...(await createSandboxOrder(template)) });
-    }
+    const orders = await paypal.listOrders();
     return NextResponse.json({
       ok: true,
       mode: paypalMode(),
-      orders: created,
-      note: "Approve each link with a sandbox personal buyer, then run scripts/capture.ts.",
+      orders,
+      stats: summarizeHolds(orders),
+      source: "paypal",
+      note: "Sandbox orders are created by scripts/seed-sandbox.ts so card captures stay out of this route. This response lists the local registry.",
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Seed failed";

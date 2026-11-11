@@ -5,6 +5,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    setupFiles: ["tests/setup.ts"],
+    env: {
+      PAYPAL_MODE: "mock",
+    },
   },
   resolve: {
     alias: {

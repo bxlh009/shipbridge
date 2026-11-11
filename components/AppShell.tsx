@@ -69,39 +69,44 @@ function clearMockOrders() {
   window.localStorage.removeItem(MOCK_KEY);
 }
 
-function nearly(shown: number, target: number, decimals: number) {
-  const factor = 10 ** decimals;
-  return Math.round(shown * factor) === Math.round(target * factor);
-}
-
 function useCount(value: number, animate: boolean) {
   const [shown, setShown] = useState(value);
+  const [settled, setSettled] = useState(true);
   const fromRef = useRef(value);
   useEffect(() => {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (!animate || reduce || fromRef.current === value) {
       fromRef.current = value;
       setShown(value);
+      setSettled(true);
       return;
     }
+    setSettled(false);
     const from = fromRef.current;
     const start = performance.now();
     const duration = 900;
     let frame = 0;
+    let cancelled = false;
     const step = (now: number) => {
+      if (cancelled) return;
       const t = Math.min(1, (now - start) / duration);
-      const eased = 1 - (1 - t) ** 3;
-      setShown(from + (value - from) * eased);
-      if (t < 1) frame = requestAnimationFrame(step);
-      else {
-        fromRef.current = value;
-        setShown(value);
+      if (t < 1) {
+        const eased = 1 - (1 - t) ** 3;
+        setShown(from + (value - from) * eased);
+        frame = requestAnimationFrame(step);
+        return;
       }
+      fromRef.current = value;
+      setShown(value);
+      setSettled(true);
     };
     frame = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
   }, [value, animate]);
-  return shown;
+  return { shown, settled };
 }
 
 export default function AppShell() {
@@ -719,13 +724,13 @@ function Stat({
   animate?: boolean;
   flash?: boolean;
 }) {
-  const shown = useCount(numeric, animate);
-  const settled = !animate || nearly(shown, numeric, decimals);
+  const count = useCount(numeric, animate);
+  const settled = !animate || count.settled;
   return (
     <article className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-sm ${flash ? "stat-flash" : ""}`}>
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tabular-nums text-[#003087]" data-testid={testId} data-settled={settled ? "true" : "false"}>
-        {format(shown)}
+      <p className="mt-1 text-2xl font-semibold tabular-nums text-[#003087]" data-testid={testId} data-settled={settled ? "true" : "false"} data-target={String(numeric)}>
+        {format(count.shown)}
       </p>
       {delta ? (
         <p className="mt-1 text-xs font-semibold text-[#0070ba]" data-testid={deltaTestId}>
