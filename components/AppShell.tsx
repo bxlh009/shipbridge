@@ -627,7 +627,7 @@ export default function AppShell() {
         {view === "shipments" ? (
           <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
             <div data-testid="hero">
-              <div className="flex items-start justify-between gap-4">
+              <div className={`flex items-start justify-between gap-4 ${toasts.length ? "pr-[336px]" : ""}`}>
                 <div className="min-w-0">
                   <h1 className="text-[20px] font-semibold leading-7 tracking-tight">{copy.pageTitle}</h1>
                   <p data-testid="hero-pitch" className="mt-1 max-w-3xl text-[14px] leading-5 text-sb-muted">
@@ -940,7 +940,7 @@ export default function AppShell() {
         </div>
       ) : null}
 
-      <div className="pointer-events-none fixed right-4 bottom-4 z-30 flex w-[320px] max-w-[calc(100vw-2rem)] flex-col gap-2">
+      <div className="pointer-events-none fixed top-14 right-4 z-30 flex w-[320px] max-w-[calc(100vw-2rem)] flex-col gap-2">
         {toasts.map((toast) => (
           <button
             key={toast.id}

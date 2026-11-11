@@ -14,7 +14,7 @@ Updated 2026-11-12 after the token-and-waybill visual pass (mock and sandbox).
 - Mock mode is stateless on the server. Orders are seeded from the fixed catalog. The browser keeps orders and trackers in `localStorage`. Sync and read-back send that state and get the next copy back. Read-back is true only when the tracking number is on the returned order. **Reset demo** clears `localStorage`. Sandbox and live mode stay on server-side REST.
 - After a verified sync, payments on hold count down and “Releasing early” counts up, with a short green tint. Sample run: 10 → 2 on hold, $0.00 → $206.79 releasing early, 7.5 days earlier. “Simulated” is a muted tag. Disputes avoided (est.) is the synced count. Tracking coverage is synced/total.
 - Sandbox seed (`scripts/seed-sandbox.ts`) creates COMPLETED captures with `payment_source.card` and `PayPal-Request-Id`. The gitignored registry `.data/sandbox-orders.json` is what `GET /api/orders` lists, via `GET /v2/checkout/orders/{id}`. Transaction Search is not used. `scripts/capture.ts` finishes any order that still needs a buyer approval.
-- Buyer reply opens a 480px right drawer: order header, pasted email, Chinese explanation (source “Rules” when AI is off), English draft with Copy, and a vertical timeline. Esc or X closes it. Sync results use a small bottom-right toast.
+- Buyer reply opens a 480px right drawer: order header, pasted email, Chinese explanation (source “Rules” when AI is off), English draft with Copy, and a vertical timeline. Esc or X closes it. Sync results use a small top-right toast under the top bar.
 - `POST /api/agent`: Vercel AI SDK tools. In sandbox/live, `@paypal/agent-toolkit` `PayPalAgentToolkit` tools are registered when the package loads. Mock mode and toolkit failures use the direct client against the orders sent with the request. No LLM key runs the same sync deterministically.
 - `GET /api/health`, vitest tests, `scripts/verify.mjs`, `scripts/screenshot.mjs`.
 
@@ -92,7 +92,6 @@ Fixed those three and re-shot.
 Left on purpose:
 
 - The drawer covers the right KPI tiles. The timeline’s later dots continue under the fold; the first scans are on screen.
-- The sync toast sits over the last grid row so the verified count stays visible.
 - Under a 10-row grid the card still fills the viewport.
 - 中文 keeps Mock / Sandbox in English. Noto Sans CJK SC is installed on this machine; fonts are not committed.
 - No purple gradients, glass, emoji, sparkle icons, uppercase eyebrows, or 01/02/03 section numbers. Stepper circles are the only numbered marks.
@@ -115,6 +114,21 @@ Left on purpose:
 - 中文 mode keeps the environment words Mock / Sandbox in English. CJK labels in the nav, KPIs, stepper, and grid are not clipped. Noto Sans CJK SC is installed on this machine; fonts are not committed.
 - “Micheal Obrien” next to “Michael O'Brien” is the sample name variant, not a clipped cell.
 - No purple gradients, glass, emoji, or marketing hero remain. The primary button is the only strong blue.
+
+## Layout pass (2026-11-12)
+
+- The sync toast is top-right, under the top bar. It does not cover the grid. While it is open, the title row keeps 336px clear so the Simulated chip stays visible.
+- Postcodes are left-aligned text. The column is 108px (`minWidth` 104), enough for `SW1A 1AA` and `M5V 2T6` at 13px plus cell padding, with space before Buyer.
+- `scripts/screenshot.mjs` clips `hero.png` with 16px of padding around the title and KPI strip (the clip starts at the bottom of the top bar). The title is no longer flush with the image edge.
+- Clipping audit at 1440×900 after sync, in EN and 中文: no `scrollWidth > clientWidth` on header labels, `.ag-cell` / `.ag-cell-value`, waybill chips, status pills, address, country, override selects, or the reply action. Sample values checked include tracking numbers, `YunExpress`, `James Whitaker`, `Michael O'Brien`, `SW1A 1AA`, `M5V 2T6`, `Verified in PayPal` / `已在 PayPal 核对`, `Skipped — risk`, `Mismatch`, `Reply to buyer` / `回复买家`, and `No match`. The header resize handle draws 3px outside the header cell; that is not label clipping. Nothing is deliberately ellipsized.
+
+Verified this pass:
+
+- `npm test`: 10 passed.
+- `npx next build`: passed (Next.js 15.5.29).
+- `PAYPAL_MODE=mock npm run start` on port 3000, then `node scripts/verify.mjs`: **ALL PASS**.
+- `npm run start -- -p 3001` (no shell `PAYPAL_MODE`; health `paypal=sandbox`), then `SHIPBRIDGE_URL=http://127.0.0.1:3001 node scripts/verify-sandbox.mjs`: **ALL PASS**. Re-push stayed on read-back for `YUNEXPRESS`, `FOUR_PX_EXPRESS`, and `YANWEN`. Anna Schmidt’s number was not written.
+- Screenshots refreshed at 1440×900: `home.png`, `hero.png`, `matched-grid.png`, `after-sync.png`, `buyer-drawer.png`, `chinese.png`, `sandbox-synced.png`.
 
 ## Not verified
 

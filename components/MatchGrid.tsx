@@ -151,7 +151,7 @@ function PostcodeCell(props: ICellRendererParams<GridRow, string, GridContext>) 
   const mismatch = Boolean(row && order && postcodeMismatch(row.postcode, order.postalCode));
   const title = row && mismatch ? mismatchTitle(row, order, props.context.copy) : undefined;
   return (
-    <span title={title} data-mismatch={mismatch ? "postcode" : undefined} className="block text-right tabular-nums">
+    <span title={title} data-mismatch={mismatch ? "postcode" : undefined} className="block text-left">
       {props.value || EMPTY}
     </span>
   );
@@ -269,8 +269,8 @@ export default function MatchGrid({
       {
         field: "trackingNumber",
         headerName: copy.colTracking,
-        width: 136,
-        minWidth: 132,
+        width: 132,
+        minWidth: 128,
         maxWidth: 148,
         pinned: "left",
         suppressSizeToFit: true,
@@ -278,13 +278,12 @@ export default function MatchGrid({
         cellRenderer: TrackingCell,
       },
       { field: "carrier", headerName: copy.colCarrier, width: 88, minWidth: 84 },
-      { field: "recipientName", headerName: copy.colRecipient, minWidth: 122, flex: 1, tooltipField: "recipientName" },
+      { field: "recipientName", headerName: copy.colRecipient, width: 116, minWidth: 116, flex: 1, tooltipField: "recipientName" },
       {
         field: "postcode",
         headerName: copy.colPostcode,
-        width: 72,
-        minWidth: 68,
-        type: "rightAligned",
+        width: 108,
+        minWidth: 104,
         suppressSizeToFit: true,
         cellRenderer: PostcodeCell,
         cellStyle: riskCellStyle,
@@ -295,16 +294,16 @@ export default function MatchGrid({
           return row?.postcode || undefined;
         },
       },
-      { field: "buyerName", headerName: copy.colBuyer, minWidth: 132, flex: 1.15, tooltipField: "buyerName" },
-      { field: "matchedOrderId", headerName: copy.colOrder, width: 88, minWidth: 84, cellRenderer: OrderCell },
-      { field: "confidence", headerName: copy.colConfidence, width: 84, minWidth: 80, type: "rightAligned", cellRenderer: ConfidenceCell },
-      { headerName: copy.colSync, width: 132, minWidth: 124, suppressSizeToFit: true, cellRenderer: StatusCell },
+      { field: "buyerName", headerName: copy.colBuyer, width: 112, minWidth: 112, flex: 1.15, tooltipField: "buyerName" },
+      { field: "matchedOrderId", headerName: copy.colOrder, width: 84, minWidth: 80, cellRenderer: OrderCell },
+      { field: "confidence", headerName: copy.colConfidence, width: 80, minWidth: 76, type: "rightAligned", cellRenderer: ConfidenceCell },
+      { headerName: copy.colSync, width: 128, minWidth: 124, suppressSizeToFit: true, cellRenderer: StatusCell },
       { headerName: copy.colAddress, width: 72, minWidth: 68, cellRenderer: AddressCell, cellStyle: riskCellStyle },
       {
         field: "country",
         headerName: copy.colCountry,
-        width: 76,
-        minWidth: 76,
+        width: 64,
+        minWidth: 60,
         suppressSizeToFit: true,
         cellRenderer: CountryCell,
         cellStyle: riskCellStyle,
@@ -319,9 +318,9 @@ export default function MatchGrid({
       { headerName: copy.colOverride, width: 96, minWidth: 92, suppressSizeToFit: true, cellRenderer: OverrideCell, sortable: false },
       {
         headerName: "",
-        width: 104,
-        minWidth: 100,
-        maxWidth: 112,
+        width: 112,
+        minWidth: 108,
+        maxWidth: 128,
         pinned: "right",
         suppressSizeToFit: true,
         cellRenderer: ReplyCell,

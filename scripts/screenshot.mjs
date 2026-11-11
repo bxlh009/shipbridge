@@ -87,7 +87,18 @@ async function main() {
   await page.getByTestId("hero-pitch").waitFor();
   await page.getByTestId("empty-state").waitFor();
   await settledStat(page, "stat-on-hold", "10");
-  await page.getByTestId("hero").screenshot({ path: path.join(dir, "hero.png") });
+  const heroBox = await page.getByTestId("hero").boundingBox();
+  if (!heroBox) throw new Error("hero missing");
+  const pad = 16;
+  const view = page.viewportSize() || { width: 1440, height: 900 };
+  const clipX = Math.max(0, heroBox.x - pad);
+  const clipY = Math.max(48, heroBox.y - pad);
+  const clipRight = Math.min(view.width, heroBox.x + heroBox.width + pad);
+  const clipBottom = Math.min(view.height, heroBox.y + heroBox.height + pad);
+  await page.screenshot({
+    path: path.join(dir, "hero.png"),
+    clip: { x: clipX, y: clipY, width: clipRight - clipX, height: clipBottom - clipY },
+  });
   await page.screenshot({ path: path.join(dir, "home.png"), fullPage: true });
 
   await enabled(page, "step-load");
