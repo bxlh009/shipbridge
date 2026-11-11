@@ -1,6 +1,6 @@
 # ShipBridge status
 
-Updated 2026-11-12 after the ops-desk visual pass (mock and sandbox).
+Updated 2026-11-12 after the token-and-waybill visual pass (mock and sandbox).
 
 ## Built
 
@@ -58,9 +58,48 @@ Real sandbox business app. Advanced Card Payments is on. Customer disputes and T
 
 GET order is retried on HTTP 429 and 5xx. A single dropped id during sync is fetched again before the row is marked missing.
 
-## Design review
+## Visual pass (2026-11-12)
 
-Reviewed the seven PNGs at 1440×900 after one fix round.
+Tokens live in `app/globals.css` (`@theme` plus `:root`): cool blue-tinted neutrals, accent `#0070E0`, brand `#003087`, radius 4/6, spacing 4/8/12/16/24/32, type 12/13/14/20/24. The signature is the waybill chip (`components/Waybill.tsx`): ui-monospace, tabular, dashed border, copy-on-click, “Copied” for under a second. Tracking numbers and order ids use it in the grid and the buyer drawer.
+
+`components/Logo.tsx` is an inline parcel whose top edge is an arrow, solid `#003087`, with a semibold ShipBridge wordmark. The same paths are `app/icon.svg`. Sidebar, toolbar, drawer, and toasts use lucide-react at 16px, stroke 1.75. The primary button shows `Pushing {done}/{total}` while a sync is in flight. Matching shows the parcel-block loader over skeleton rows. EN / 中文 is a segmented control with a 200ms thumb. The grid search shakes 2px when nothing matches. Tracking coverage has a 3px bar. The drawer timeline is a vertical scan line with dots. `prefers-reduced-motion` turns the motion off.
+
+## Verification (this pass)
+
+- `npm test`: 10 passed.
+- `npx next build`: passed (Next.js 15.5.29). `app/icon.svg` is emitted.
+- `PAYPAL_MODE=mock npm run start` on port 3000, then `node scripts/verify.mjs`: **ALL PASS**.
+- `npm run start -- -p 3001` (no shell `PAYPAL_MODE`; health `paypal=sandbox`), then `SHIPBRIDGE_URL=http://127.0.0.1:3001 node scripts/verify-sandbox.mjs`: **ALL PASS**. Re-push stayed on read-back for `YUNEXPRESS`, `FOUR_PX_EXPRESS`, and `YANWEN`. Anna Schmidt’s number was not written.
+- Screenshots refreshed at 1440×900: `home.png`, `hero.png`, `matched-grid.png`, `after-sync.png`, `buyer-drawer.png`, `chinese.png`, `sandbox-synced.png`.
+
+## Design review (round 1)
+
+Opened the seven PNGs after the first token pass.
+
+- Rule 13: the Country header rendered as “Cou”, Override sat under the pinned action column, and “Micheal Obrien” / “James Whitaker” ellipsized. Column widths were wider than the 1440 grid.
+- Rule 14: the first mark read as a flag at 22px. The body was mostly the arrow.
+- Rule 9: the drawer’s scan line was below the 900px fold, and the verified-row flash restarted when the locale changed, so `chinese.png` stayed green.
+
+## Design review (round 2)
+
+Fixed those three and re-shot.
+
+- Country, Override, and the sample name variants are fully visible in English and 中文. Postcode `10117` and Address “Mismatch” stay on `#FEF2F2`. The risk bar is only on the pinned selection edge. Empty cells use “–”. Order ids in sandbox render as `INV-1001` waybill chips.
+- The mark is a rectangle with the top edge extended into an arrow, `#003087`, plus the semibold wordmark. Favicon matches.
+- The drawer shows the vertical scan line and the first dots at 1440×900. The English draft scrolls inside its own box so that line stays on screen. The verified flash runs once after sync, not on every locale render.
+- KPI labels are sentence case. One filled accent button on the shipments view (the empty state owns it before a manifest; Push tracking owns it after). The coverage tile has the thin bar. Sandbox pill reads Sandbox, releasing early `$206.79`, 2 still on hold, 8/10 synced.
+
+Left on purpose:
+
+- The drawer covers the right KPI tiles. The timeline’s later dots continue under the fold; the first scans are on screen.
+- The sync toast sits over the last grid row so the verified count stays visible.
+- Under a 10-row grid the card still fills the viewport.
+- 中文 keeps Mock / Sandbox in English. Noto Sans CJK SC is installed on this machine; fonts are not committed.
+- No purple gradients, glass, emoji, sparkle icons, uppercase eyebrows, or 01/02/03 section numbers. Stepper circles are the only numbered marks.
+
+## Earlier ops-desk review
+
+Reviewed the seven PNGs at 1440×900 after one fix round, before the waybill pass.
 
 Fixed in that round:
 

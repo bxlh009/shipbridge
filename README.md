@@ -245,6 +245,21 @@ The timeline in the buyer reply is the same kind of estimate. It is labeled simu
 
 Roadmap: delivery webhooks so “days released earlier” can follow actual scans, a dispute evidence bundle for item-not-received cases, more carrier templates, and a persisted match log for multi-user deploys.
 
+## Credits
+
+Button, checkbox, loader, switch, and input motion are adapted from [uiverse.io](https://uiverse.io) snippets stored in `docs/uiverse/`. Each snippet is MIT. The originals were toned down to ShipBridge tokens (no glow, 2px shake, 200ms thumb).
+
+| Piece | Author | Source |
+| --- | --- | --- |
+| Primary button (inset highlight, press) | TCdesign-dev | https://uiverse.io/TCdesign-dev/silent-sheep-31 |
+| Secondary bordered button | ErzenXz | https://uiverse.io/ErzenXz/slimy-chicken-63 |
+| Checkbox check animation | Galahhad | https://uiverse.io/Galahhad/sweet-ape-100 |
+| Parcel-sorting loader | cosnametv | https://uiverse.io/cosnametv/spotty-starfish-76 |
+| Segmented switch | Praashoo7 | https://uiverse.io/Praashoo7/angry-starfish-78 |
+| Shake-on-no-results input | Galahhad | https://uiverse.io/Galahhad/average-snail-50 |
+
+Icons are [lucide-react](https://lucide.dev) (ISC).
+
 ## License
 
 MIT. Copyright 2026 ShipBridge contributors.

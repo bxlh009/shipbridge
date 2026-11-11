@@ -2,11 +2,15 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, Check, GitCompare, Package, Receipt, Search, Send, Settings, ShieldAlert, Upload, X } from "lucide-react";
 import { countryMismatch, postcodeMismatch } from "@/lib/matcher";
 import { mapCarrier } from "@/lib/carriers";
 import { dictionaries, type Locale } from "@/lib/i18n";
 import { sampleBuyerEmail } from "@/lib/buyer";
 import { SELLER_PROTECTION_WARNING, type GridRow, type HoldStats, type ManifestRow, type Order } from "@/lib/types";
+import Logo from "@/components/Logo";
+import ParcelLoader from "@/components/ParcelLoader";
+import Waybill from "@/components/Waybill";
 
 const MatchGrid = dynamic(() => import("@/components/MatchGrid"), { ssr: false });
 
@@ -89,7 +93,7 @@ function useCount(value: number, animate: boolean) {
     setSettled(false);
     const from = fromRef.current;
     const start = performance.now();
-    const duration = 900;
+    const duration = 700;
     let frame = 0;
     let cancelled = false;
     const step = (now: number) => {
@@ -144,7 +148,12 @@ export default function AppShell() {
   const [drawer, setDrawer] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [query, setQuery] = useState("");
+  const [shake, setShake] = useState(false);
+  const [pushProgress, setPushProgress] = useState<{ done: number; total: number } | null>(null);
+  const [flashIds, setFlashIds] = useState<string[]>([]);
   const toastSeq = useRef(0);
+  const flashTimer = useRef(0);
 
   const riskCount = rows.filter((row) => row.addressRisk && row.matchedOrderId).length;
   const loaded = rows.length > 0;
@@ -279,6 +288,7 @@ export default function AppShell() {
   function takeManifest(manifest: ManifestRow[]) {
     setRows(toGrid(manifest));
     setSelected([]);
+    setQuery("");
     setMatched(false);
     setSynced(false);
     setReply(null);
@@ -380,7 +390,13 @@ export default function AppShell() {
   }
 
   function acceptSync(body: { rows?: GridRow[]; orders?: Order[]; stats?: HoldStats; paypal?: string }) {
-    if (Array.isArray(body.rows)) setRows(body.rows);
+    if (Array.isArray(body.rows)) {
+      setRows(body.rows);
+      const ids = body.rows.filter((row) => row.syncStatus === "verified").map((row) => row.id);
+      setFlashIds(ids);
+      window.clearTimeout(flashTimer.current);
+      flashTimer.current = window.setTimeout(() => setFlashIds([]), 800);
+    }
     if (Array.isArray(body.orders)) rememberOrders(body.orders, body.paypal || health.paypal);
     if (body.stats) revealStats(body.stats);
     setSynced(true);
@@ -397,7 +413,17 @@ export default function AppShell() {
   }
 
   async function sync() {
+    const total = Math.max(pushableCount(rows, selected), 1);
     setBusy("sync");
+    setPushProgress({ done: 1, total });
+    const timer = window.setInterval(() => {
+      setPushProgress((prev) => {
+        if (!prev) return prev;
+        const cap = Math.max(prev.total - 1, 1);
+        if (prev.done >= cap) return prev;
+        return { done: prev.done + 1, total: prev.total };
+      });
+    }, 200);
     try {
       const payload = rows.map((row) => ({ ...row, selected: selected.includes(row.id) }));
       setSelected([]);
@@ -415,6 +441,8 @@ export default function AppShell() {
     } catch (err) {
       pushToast("err", err instanceof Error ? err.message : "Sync failed");
     } finally {
+      window.clearInterval(timer);
+      setPushProgress(null);
       setBusy("");
     }
   }
@@ -453,6 +481,7 @@ export default function AppShell() {
     clearMockOrders();
     setRows([]);
     setSelected([]);
+    setQuery("");
     setMatched(false);
     setSynced(false);
     setReply(null);
@@ -460,6 +489,7 @@ export default function AppShell() {
     setImpact(null);
     setMotion(false);
     setFlash(false);
+    setFlashIds([]);
     setDrawer(false);
     setToasts([]);
     try {
@@ -525,53 +555,69 @@ export default function AppShell() {
   const disputesDelta = impact && impact.disputesFrom !== impact.disputesTo ? `${impact.disputesFrom} → ${impact.disputesTo}` : undefined;
   const coverageDelta = impact && impact.disputesFrom !== impact.disputesTo ? `${Math.round(coverageFrom)}% → ${Math.round(coverageTo)}%` : undefined;
 
-  const primaryLabel = busy === "match" ? copy.matching : busy === "sync" ? copy.syncing : !loaded ? copy.primaryLoad : !matched ? copy.primaryMatch : `${copy.primarySync} (${pushCount})`;
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => {
+      const order = orders.find((item) => item.id === row.matchedOrderId);
+      const hay = [row.trackingNumber, row.recipientName, row.buyerName, row.matchedOrderId, order?.invoiceId, order?.id].filter(Boolean).join(" ").toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [orders, query, rows]);
+
+  useEffect(() => {
+    if (!query.trim() || !rows.length || filtered.length > 0) return;
+    setShake(true);
+    const timer = window.setTimeout(() => setShake(false), 320);
+    return () => window.clearTimeout(timer);
+  }, [filtered.length, query, rows.length]);
+
+  const pushingLabel = pushProgress ? copy.pushing.replace("{done}", String(pushProgress.done)).replace("{total}", String(pushProgress.total)) : copy.syncing;
+  const primaryLabel = busy === "match" ? copy.matching : busy === "sync" ? pushingLabel : !loaded ? copy.primaryLoad : !matched ? copy.primaryMatch : `${copy.primarySync} (${pushCount})`;
 
   const headerOrder = orders.find((order) => order.id === (reply?.detectedOrderId || orderId)) || null;
   const headerRow = rows.find((row) => row.matchedOrderId && row.matchedOrderId === headerOrder?.id);
-  const headerTracking = reply?.trackingNumber || headerOrder?.tracking?.[0]?.trackingNumber || headerRow?.trackingNumber || "—";
-  const headerCarrier = reply?.carrier || headerOrder?.tracking?.[0]?.carrier || headerRow?.carrier || headerOrder?.plannedCarrier || "—";
+  const headerTracking = reply?.trackingNumber || headerOrder?.tracking?.[0]?.trackingNumber || headerRow?.trackingNumber || "–";
+  const headerCarrier = reply?.carrier || headerOrder?.tracking?.[0]?.carrier || headerRow?.carrier || headerOrder?.plannedCarrier || "–";
+
+  const primaryIcon = busy === "sync" ? null : !loaded ? null : !matched ? <GitCompare size={16} strokeWidth={1.75} className="sb-icon" /> : <Send size={16} strokeWidth={1.75} className="sb-icon" />;
 
   return (
-    <div className={`flex h-screen overflow-hidden bg-[#F6F7F9] text-[#111827] ${locale === "zh" ? "locale-zh" : ""}`}>
-      <aside className="flex w-[184px] shrink-0 flex-col border-r border-[#E5E7EB] bg-white">
-        <div className="flex h-12 items-center gap-2 border-b border-[#E5E7EB] px-3">
-          <Mark />
-          <span className="text-[14px] font-semibold tracking-tight">ShipBridge</span>
+    <div className="flex h-screen overflow-hidden bg-sb-bg text-sb-ink">
+      <aside className="flex w-[172px] shrink-0 flex-col border-r border-sb-line bg-sb-surface">
+        <div className="flex h-12 items-center px-3">
+          <Logo size={22} />
         </div>
-        <nav className="flex flex-col gap-0.5 p-2" aria-label="Primary">
-          <NavItem label={copy.navShipments} active={view === "shipments"} onClick={() => setView("shipments")} />
-          <NavItem label={copy.navOrders} soon={copy.soon} active={view === "orders"} onClick={() => setView("orders")} />
-          <NavItem label={copy.navDisputes} aside={copy.navRisk} active={view === "disputes"} onClick={() => setView("disputes")} />
-          <NavItem label={copy.navSettings} soon={copy.soon} active={view === "settings"} onClick={() => setView("settings")} />
+        <nav className="flex flex-col gap-1 p-2" aria-label="Primary">
+          <NavItem icon={<Package size={16} strokeWidth={1.75} />} label={copy.navShipments} active={view === "shipments"} onClick={() => setView("shipments")} />
+          <NavItem icon={<Receipt size={16} strokeWidth={1.75} />} label={copy.navOrders} soon={copy.soon} active={view === "orders"} onClick={() => setView("orders")} />
+          <NavItem icon={<ShieldAlert size={16} strokeWidth={1.75} />} label={copy.navDisputes} aside={copy.navRisk} active={view === "disputes"} onClick={() => setView("disputes")} />
+          <NavItem icon={<Settings size={16} strokeWidth={1.75} />} label={copy.navSettings} soon={copy.soon} active={view === "settings"} onClick={() => setView("settings")} />
         </nav>
-        <p className="mt-auto border-t border-[#E5E7EB] px-3 py-3 text-[11px] text-[#9CA3AF]">{copy.sampleFoot}</p>
+        <p className="mt-auto px-3 py-4 text-[12px] text-sb-muted">{copy.sampleFoot}</p>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-[#E5E7EB] bg-white px-4">
-          <p className="truncate text-[13px] text-[#374151]">{copy.merchant}</p>
+        <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-sb-line bg-sb-surface px-4">
+          <p className="truncate text-[13px] text-sb-secondary">{copy.merchant}</p>
           <div className="flex shrink-0 items-center gap-3">
             <span
               data-testid="paypal-chip"
-              className={`rounded-[6px] border px-1.5 py-0.5 text-[11px] font-medium leading-4 ${
-                env === "sandbox"
-                  ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#0070E0]"
-                  : env === "live"
-                    ? "border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]"
-                    : "border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]"
+              className={`sb-env ${
+                env === "sandbox" ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#0070E0]" : env === "live" ? "border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]" : "border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]"
               }`}
             >
               {envLabel}
             </span>
-            <span data-testid="ai-chip" className="text-[12px] text-[#6B7280]">
+            <span data-testid="ai-chip" className="text-[12px] text-sb-muted">
               {aiLabel}
             </span>
-            <div className="flex overflow-hidden rounded-[6px] border border-[#E5E7EB] text-[12px]">
-              <button type="button" data-testid="lang-en" className={`px-2 py-1 ${locale === "en" ? "bg-[#111827] text-white" : "bg-white text-[#4B5563]"}`} onClick={() => chooseLocale("en")}>
+            <div className="sb-lang" data-locale={locale} role="group" aria-label="Language">
+              <span className="sb-lang-thumb" aria-hidden />
+              <button type="button" data-testid="lang-en" aria-pressed={locale === "en"} onClick={() => chooseLocale("en")}>
                 EN
               </button>
-              <button type="button" data-testid="lang-zh" className={`px-2 py-1 ${locale === "zh" ? "bg-[#111827] text-white" : "bg-white text-[#4B5563]"}`} onClick={() => chooseLocale("zh")}>
+              <button type="button" data-testid="lang-zh" aria-pressed={locale === "zh"} onClick={() => chooseLocale("zh")}>
                 中文
               </button>
             </div>
@@ -579,21 +625,21 @@ export default function AppShell() {
         </header>
 
         {view === "shipments" ? (
-          <div className="flex min-h-0 flex-1 flex-col px-3 py-3">
+          <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
             <div data-testid="hero">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <h1 className="text-[18px] font-semibold leading-6 tracking-tight">{copy.pageTitle}</h1>
-                  <p data-testid="hero-pitch" className="mt-0.5 max-w-3xl text-[13px] leading-5 text-[#6B7280]">
+                  <h1 className="text-[20px] font-semibold leading-7 tracking-tight">{copy.pageTitle}</h1>
+                  <p data-testid="hero-pitch" className="mt-1 max-w-3xl text-[14px] leading-5 text-sb-muted">
                     {copy.subtitle}
                   </p>
                 </div>
-                <span title={copy.simulatedTip} className="mt-0.5 shrink-0 cursor-help rounded-[6px] border border-[#E5E7EB] bg-white px-1.5 py-0.5 text-[11px] text-[#6B7280]">
+                <span title={copy.simulatedTip} className="sb-chip mt-1 shrink-0 cursor-help border-sb-line bg-sb-surface text-[12px] text-sb-muted">
                   {copy.simulated}
                 </span>
               </div>
 
-              <section className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-4" data-testid="impact-stats">
+              <section className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4" data-testid="impact-stats">
                 <Stat
                   label={copy.onHold}
                   numeric={stats.onHoldCount}
@@ -602,7 +648,7 @@ export default function AppShell() {
                   testId="stat-on-hold"
                   delta={onHoldDelta}
                   deltaTestId="delta-on-hold"
-                  foot={stats.totalOrders ? `${money(stats.onHoldAmount, stats.currency)} ${copy.heldAmount}` : "—"}
+                  foot={stats.totalOrders ? `${money(stats.onHoldAmount, stats.currency)} ${copy.heldAmount}` : "–"}
                   footTestId="stat-amount"
                   animate={motion}
                   flash={flash && Boolean(onHoldDelta)}
@@ -653,13 +699,13 @@ export default function AppShell() {
                   }
                   animate={motion}
                   flash={flash && Boolean(coverageDelta)}
+                  bar
                 />
               </section>
             </div>
 
             <section
-              className={`mt-3 flex min-h-0 flex-1 flex-col border bg-white ${dragOver ? "border-[#0070E0]" : "border-[#E5E7EB]"}`}
-              style={{ borderRadius: 8 }}
+              className={`sb-panel mt-4 flex min-h-0 flex-1 flex-col ${dragOver ? "border-sb-accent" : ""}`}
               onDragOver={(event) => {
                 event.preventDefault();
                 setDragOver(true);
@@ -672,16 +718,15 @@ export default function AppShell() {
                 if (file) void onFile(file);
               }}
             >
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[#E5E7EB] px-3 py-2">
-                <div data-testid="demo-steps" className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2">
+                <div data-testid="demo-steps" className="flex min-w-0 flex-wrap items-center gap-1">
                   <DemoStep index={1} label={copy.stepLoad} active={phase === 1} done={loaded} disabled={!idle} onClick={() => void loadSample("all")} testId="step-load" />
-                  <span className="hidden h-px w-4 bg-[#E5E7EB] sm:block" aria-hidden />
                   <DemoStep index={2} label={copy.stepMatch} active={phase === 2} done={matched} disabled={!loaded || !idle} onClick={() => void match()} testId="step-match" />
-                  <span className="hidden h-px w-4 bg-[#E5E7EB] sm:block" aria-hidden />
                   <DemoStep index={3} label={copy.stepSync} active={phase === 3} done={synced} disabled={!matched || !idle} onClick={() => void sync()} testId="step-sync" />
                 </div>
-                <div className="ml-auto flex flex-wrap items-center gap-1.5">
-                  <label className="inline-flex h-8 cursor-pointer items-center rounded-[6px] border border-[#E5E7EB] bg-white px-2.5 text-[13px] text-[#111827]">
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <label className="sb-btn cursor-pointer">
+                    <Upload size={16} strokeWidth={1.75} className="sb-icon" />
                     {copy.uploadFile}
                     <input
                       data-testid="upload-file"
@@ -698,7 +743,7 @@ export default function AppShell() {
                   <select
                     aria-label={copy.sample}
                     data-testid="sample-picker"
-                    className="h-8 rounded-[6px] border border-[#E5E7EB] bg-white px-2 text-[13px]"
+                    className="sb-select"
                     value=""
                     onChange={(event) => {
                       const value = event.target.value;
@@ -710,58 +755,77 @@ export default function AppShell() {
                     <option value="4px">{copy.fourpx}</option>
                     <option value="yanwen">{copy.yanwen}</option>
                   </select>
-                  <button type="button" disabled={!rows.length || busy === "agent"} className="h-8 rounded-[6px] border border-[#E5E7EB] bg-white px-2.5 text-[13px] text-[#374151] disabled:opacity-40" onClick={() => void agent()}>
+                  <button type="button" disabled={!rows.length || busy === "agent"} className="sb-btn disabled:opacity-40" onClick={() => void agent()}>
                     {copy.agent}
                   </button>
-                  <button type="button" data-testid="reset-demo" className="h-8 px-2 text-[13px] text-[#4B5563] hover:text-[#111827]" onClick={() => void reset()}>
+                  <button type="button" data-testid="reset-demo" className="sb-btn-text" onClick={() => void reset()}>
                     {copy.reset}
                   </button>
-                  <button type="button" data-testid="buyer-message" className="h-8 rounded-[6px] border border-[#E5E7EB] bg-white px-2.5 text-[13px] text-[#111827]" onClick={() => openReply()}>
+                  <button type="button" data-testid="buyer-message" className="sb-btn" onClick={() => openReply()}>
                     {copy.buyer}
                   </button>
                   <button
                     type="button"
                     data-testid="primary-action"
                     disabled={!idle}
-                    className="h-8 rounded-[6px] bg-[#0070E0] px-3 text-[13px] font-medium text-white disabled:opacity-40"
+                    aria-busy={busy === "sync"}
+                    className={`${loaded ? "sb-btn-primary" : "sb-btn"} ${busy === "sync" ? "is-busy" : ""}`}
                     onClick={runPrimary}
                   >
+                    {primaryIcon}
                     {primaryLabel}
                   </button>
                 </div>
               </div>
 
+              {rows.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-3 px-3 pb-2">
+                  <label className={`sb-search ${shake ? "is-shake" : ""}`}>
+                    <Search size={16} strokeWidth={1.75} className="sb-icon" aria-hidden />
+                    <input data-testid="grid-search" value={query} placeholder={copy.searchPlaceholder} aria-label={copy.searchPlaceholder} onChange={(event) => setQuery(event.target.value)} />
+                  </label>
+                  {query.trim() && filtered.length === 0 ? <span className="sb-search-miss">{copy.searchEmpty}</span> : null}
+                </div>
+              ) : null}
+
               {riskCount > 0 ? (
-                <p className="border-b border-[#FECACA] bg-[#FEF2F2] px-3 py-1.5 text-[12px] leading-5 text-[#991B1B]" data-testid="risk-note">
+                <p className="bg-[#FEF2F2] px-3 py-2 text-[12px] leading-5 text-[#991B1B]" data-testid="risk-note">
                   {riskCount} {copy.riskNote}
                 </p>
               ) : null}
 
               {agentText ? (
-                <details className="border-b border-[#E5E7EB] px-3 py-1.5 text-[12px] text-[#4B5563]">
+                <details className="px-3 py-2 text-[12px] text-sb-secondary">
                   <summary className="cursor-pointer">{copy.agentResult}</summary>
                   <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-[12px] leading-5">{agentText}</pre>
                 </details>
               ) : null}
 
-              <div className="relative min-h-0 flex-1">
+              <div className="relative min-h-0 flex-1 border-t border-sb-line">
                 {busy === "parse" || busy === "match" || busy === "sync" ? (
                   <div className="absolute inset-0">
-                    <Skeleton label={copy.loading} />
+                    <Skeleton label={busy === "match" ? copy.matching : copy.loading} />
+                    {busy === "match" ? (
+                      <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2">
+                        <ParcelLoader label={copy.matching} />
+                      </div>
+                    ) : null}
                   </div>
                 ) : rows.length === 0 ? (
                   <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center" data-testid="empty-state">
-                    <EmptyIcon />
-                    <h2 className="mt-3 text-[14px] font-semibold">{copy.emptyTitle}</h2>
-                    <p className="mt-1 max-w-md text-[13px] leading-5 text-[#6B7280]">{copy.emptyBody}</p>
-                    <button type="button" data-testid="use-sample" className="mt-4 h-8 rounded-[6px] bg-[#0070E0] px-3 text-[13px] font-medium text-white" onClick={() => void loadSample("all")}>
+                    <WaybillArt />
+                    <h2 className="mt-4 text-[16px] font-semibold">{copy.emptyTitle}</h2>
+                    <p className="mt-2 max-w-md text-[14px] leading-6 text-sb-muted">{copy.emptyBody}</p>
+                    <button type="button" data-testid="use-sample" className="sb-btn-primary mt-4" onClick={() => void loadSample("all")}>
                       {copy.primaryLoad}
                     </button>
-                    <p className="mt-2 text-[12px] text-[#9CA3AF]">{copy.dropHint}</p>
+                    <p className="mt-2 text-[12px] text-sb-muted">{copy.dropHint}</p>
                   </div>
+                ) : query.trim() && filtered.length === 0 ? (
+                  <div className="sb-filter-empty">{copy.searchEmpty}</div>
                 ) : (
                   <div className="absolute inset-0">
-                    <MatchGrid rows={rows} orders={orders} copy={copy} matched={matched} onOverride={override} onReply={openReply} onSelection={setSelected} />
+                    <MatchGrid rows={filtered} orders={orders} copy={copy} matched={matched} flashIds={flashIds} onOverride={override} onReply={openReply} onSelection={setSelected} />
                   </div>
                 )}
               </div>
@@ -778,23 +842,23 @@ export default function AppShell() {
 
       {drawer ? (
         <div className="fixed inset-0 z-40">
-          <button type="button" className="absolute inset-0 bg-[#111827]/20" aria-label={copy.close} onClick={() => setDrawer(false)} />
-          <aside data-testid="buyer-drawer" role="dialog" aria-modal="true" aria-label={copy.buyer} className="absolute top-0 right-0 flex h-full w-[480px] max-w-full flex-col border-l border-[#E5E7EB] bg-white">
-            <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#E5E7EB] px-4">
-              <h2 className="text-[14px] font-semibold">{copy.buyer}</h2>
-              <button type="button" data-testid="drawer-close" className="grid h-7 w-7 place-items-center rounded-[6px] text-[#4B5563] hover:bg-[#F3F4F6]" onClick={() => setDrawer(false)} aria-label={copy.close}>
-                <CloseIcon />
+          <button type="button" className="absolute inset-0 bg-[#122033]/20" aria-label={copy.close} onClick={() => setDrawer(false)} />
+          <aside data-testid="buyer-drawer" role="dialog" aria-modal="true" aria-label={copy.buyer} className="sb-drawer absolute top-0 right-0 flex h-full w-[480px] max-w-full flex-col border-l border-sb-line bg-sb-surface">
+            <div className="flex h-12 shrink-0 items-center justify-between px-4">
+              <h2 className="text-[16px] font-semibold">{copy.buyer}</h2>
+              <button type="button" data-testid="drawer-close" className="sb-btn-text h-8 w-8 p-0 text-sb-secondary" onClick={() => setDrawer(false)} aria-label={copy.close}>
+                <X size={16} strokeWidth={1.75} />
               </button>
             </div>
-            <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 border-b border-[#E5E7EB] pb-3 text-[13px]">
+            <div className="min-h-0 flex-1 overflow-auto px-4 pb-4" data-testid="drawer-body">
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[13px]">
                 <Field label={copy.colBuyer} value={headerOrder?.buyerName || reply?.buyerName || copy.noOrder} />
-                <Field label={copy.colOrder} value={headerOrder ? orderRef(headerOrder) : reply?.detectedOrderId || "—"} />
-                <Field label={copy.colTracking} value={headerTracking} />
+                <Field label={copy.colOrder} value={headerOrder ? orderRef(headerOrder) : reply?.detectedOrderId || "–"} waybill={Boolean(headerOrder || reply?.detectedOrderId)} copyValue={headerOrder?.id || reply?.detectedOrderId || undefined} copiedLabel={copy.copied} />
+                <Field label={copy.colTracking} value={headerTracking} waybill={headerTracking !== "–" && headerTracking !== "—"} copiedLabel={copy.copied} />
                 <Field label={copy.colCarrier} value={headerCarrier} />
               </dl>
 
-              <label className="mt-3 block text-[12px] font-medium text-[#4B5563]" htmlFor="buyer-email">
+              <label className="mt-4 block text-[12px] font-medium text-sb-secondary" htmlFor="buyer-email">
                 {copy.emailLabel}
               </label>
               <textarea
@@ -803,10 +867,10 @@ export default function AppShell() {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="Where is my order?"
-                className="mt-1 h-[88px] w-full resize-y rounded-[6px] border border-[#E5E7EB] p-2 text-[13px] leading-5"
+                className="mt-1 h-[64px] w-full resize-y rounded-[4px] border border-sb-line p-2 text-[13px] leading-5"
               />
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <select className="h-8 max-w-[220px] rounded-[6px] border border-[#E5E7EB] bg-white px-2 text-[13px]" value={orderId} onChange={(event) => setOrderId(event.target.value)} aria-label={copy.colOrder}>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <select className="sb-select max-w-[220px]" value={orderId} onChange={(event) => setOrderId(event.target.value)} aria-label={copy.colOrder}>
                   <option value="">{copy.auto}</option>
                   {orders.map((order) => (
                     <option key={order.id} value={order.id}>
@@ -816,7 +880,7 @@ export default function AppShell() {
                 </select>
                 <button
                   type="button"
-                  className="h-8 rounded-[6px] border border-[#E5E7EB] px-2.5 text-[13px]"
+                  className="sb-btn"
                   onClick={() => {
                     setEmail(sampleBuyerEmail());
                     setOrderId("");
@@ -825,18 +889,18 @@ export default function AppShell() {
                 >
                   {copy.sampleEmail}
                 </button>
-                <button type="button" data-testid="draft-reply" className="h-8 rounded-[6px] bg-[#0070E0] px-3 text-[13px] font-medium text-white disabled:opacity-40" disabled={busy === "reply"} onClick={() => void draft()}>
+                <button type="button" data-testid="draft-reply" className="sb-btn-primary" disabled={busy === "reply"} onClick={() => void draft()}>
                   {busy === "reply" ? copy.drafting : copy.draft}
                 </button>
               </div>
 
               <div data-testid="reply-output" className="mt-4">
                 {reply ? (
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     <section>
-                      <h3 className="text-[12px] font-semibold text-[#111827]">{copy.chineseSection}</h3>
-                      <p className="mt-0.5 text-[11px] text-[#9CA3AF]">{reply.source === "llm" ? copy.draftSourceModel : copy.draftSourceRules}</p>
-                      <div className="mt-2 space-y-2 text-[13px] leading-6">
+                      <h3 className="text-[14px] font-semibold text-sb-ink">{copy.chineseSection}</h3>
+                      <p className="mt-1 text-[12px] text-sb-muted">{reply.source === "llm" ? copy.draftSourceModel : copy.draftSourceRules}</p>
+                      <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-[13px] leading-5">
                         <Block title={copy.summary} body={reply.chinese.summary} />
                         <Block title={copy.mood} body={reply.chinese.mood} />
                         <Block title={copy.ask} body={reply.chinese.ask} />
@@ -845,23 +909,22 @@ export default function AppShell() {
                     </section>
                     <section>
                       <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-[12px] font-semibold text-[#111827]">{copy.englishSection}</h3>
-                        <button type="button" className="h-7 rounded-[6px] border border-[#E5E7EB] px-2 text-[12px]" onClick={() => void copyReply()}>
+                        <h3 className="text-[14px] font-semibold text-sb-ink">{copy.englishSection}</h3>
+                        <button type="button" className="sb-btn sb-btn-sm" onClick={() => void copyReply()}>
                           {copied ? copy.copied : copy.copy}
                         </button>
                       </div>
-                      <pre className="mt-2 whitespace-pre-wrap text-[13px] leading-5 text-[#111827]">{reply.englishReply}</pre>
+                      <pre className="mt-2 max-h-[112px] overflow-auto whitespace-pre-wrap text-[13px] leading-5 text-sb-ink">{reply.englishReply}</pre>
                     </section>
                     {reply.timeline?.length ? (
                       <section>
-                        <h3 className="text-[12px] font-semibold text-[#111827]">{copy.timeline}</h3>
-                        <p className="mt-0.5 text-[11px] text-[#9CA3AF]">{reply.timelineNote || copy.timelineNote}</p>
-                        <ol className="mt-3 ml-1 border-l border-[#E5E7EB]">
+                        <h3 className="text-[14px] font-semibold text-sb-ink">{copy.timeline}</h3>
+                        <p className="mt-1 text-[12px] text-sb-muted">{reply.timelineNote || copy.timelineNote}</p>
+                        <ol className="sb-timeline">
                           {reply.timeline.map((event) => (
-                            <li key={`${event.date}-${event.label}`} className="relative mb-3 ml-4">
-                              <span className="absolute top-1.5 -left-[21px] h-2 w-2 rounded-full border border-[#D1D5DB] bg-white" />
-                              <p className="text-[12px] tabular-nums text-[#6B7280]">{event.date}</p>
-                              <p className="text-[13px] leading-5 text-[#111827]">{event.label}</p>
+                            <li key={`${event.date}-${event.label}`}>
+                              <p className="text-[12px] tabular-nums text-sb-muted">{event.date}</p>
+                              <p className="text-[13px] leading-5 text-sb-ink">{event.label}</p>
                             </li>
                           ))}
                         </ol>
@@ -869,7 +932,7 @@ export default function AppShell() {
                     ) : null}
                   </div>
                 ) : (
-                  <p className="text-[13px] text-[#9CA3AF]">{copy.drawerEmpty}</p>
+                  <p className="text-[13px] text-sb-muted">{copy.drawerEmpty}</p>
                 )}
               </div>
             </div>
@@ -877,23 +940,26 @@ export default function AppShell() {
         </div>
       ) : null}
 
-      <div className="pointer-events-none fixed right-4 bottom-4 z-30 flex w-[300px] max-w-[calc(100vw-2rem)] flex-col gap-2">
+      <div className="pointer-events-none fixed right-4 bottom-4 z-30 flex w-[320px] max-w-[calc(100vw-2rem)] flex-col gap-2">
         {toasts.map((toast) => (
           <button
             key={toast.id}
             type="button"
             data-testid={toast.kind === "err" ? "error-banner" : "toast"}
             role={toast.kind === "err" ? "alert" : "status"}
-            className={`pointer-events-auto rounded-[6px] border border-[#E5E7EB] border-l-2 bg-white px-3 py-2 text-left text-[13px] leading-5 text-[#111827] shadow-[0_1px_2px_rgba(17,24,39,0.06)] ${
+            className={`sb-toast pointer-events-auto flex items-start gap-2 rounded-[6px] border border-sb-line border-l-2 bg-sb-surface px-3 py-2 text-left text-[13px] leading-5 text-sb-ink ${
               toast.kind === "err" ? "border-l-[#B91C1C]" : "border-l-[#067647]"
             }`}
             onClick={() => setToasts((current) => current.filter((item) => item.id !== toast.id))}
           >
-            {toast.text.split(" · ").map((line) => (
-              <span key={line} className="block">
-                {line}
-              </span>
-            ))}
+            {toast.kind === "err" ? <AlertCircle size={16} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[#B91C1C]" /> : <Check size={16} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[#067647]" />}
+            <span>
+              {toast.text.split(" · ").map((line) => (
+                <span key={line} className="block">
+                  {line}
+                </span>
+              ))}
+            </span>
           </button>
         ))}
       </div>
@@ -913,6 +979,7 @@ function Stat({
   footTestId,
   animate = false,
   flash = false,
+  bar = false,
 }: {
   label: string;
   tag?: string;
@@ -926,24 +993,30 @@ function Stat({
   footTestId?: string;
   animate?: boolean;
   flash?: boolean;
+  bar?: boolean;
 }) {
   const count = useCount(numeric, animate);
   const settled = !animate || count.settled;
   return (
-    <article className={`rounded-[8px] border border-[#E5E7EB] bg-white px-3 py-2 ${flash ? "stat-flash" : ""}`}>
+    <article className={`sb-kpi ${flash ? "stat-flash" : ""}`}>
       <p className="k-label">
         {label}
-        {tag ? <span className="ml-1 font-normal tracking-normal text-[#9CA3AF] normal-case">{tag}</span> : null}
+        {tag ? <span className="ml-1 font-normal text-sb-faint">{tag}</span> : null}
       </p>
-      <p className="mt-1 text-[22px] font-semibold leading-7 tracking-tight text-[#111827] tabular-nums" data-testid={testId} data-settled={settled ? "true" : "false"} data-target={String(numeric)}>
+      <p className="sb-kpi-value" data-testid={testId} data-settled={settled ? "true" : "false"} data-target={String(numeric)}>
         {format(count.shown)}
       </p>
-      <p className="mt-0.5 h-4 truncate text-[12px] leading-4 text-[#4B5563] tabular-nums" data-testid={deltaTestId}>
+      <p className="mt-1 h-4 truncate text-[12px] leading-4 text-sb-secondary tabular-nums" data-testid={deltaTestId}>
         {delta || "\u00a0"}
       </p>
-      <p className="h-4 truncate text-[12px] leading-4 text-[#9CA3AF] tabular-nums" data-testid={footTestId}>
+      <p className="h-4 truncate text-[12px] leading-4 text-sb-muted tabular-nums" data-testid={footTestId}>
         {foot || "\u00a0"}
       </p>
+      {bar ? (
+        <div className="sb-coverage" aria-hidden>
+          <span style={{ width: `${Math.max(0, Math.min(100, count.shown))}%` }} />
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -974,43 +1047,44 @@ function DemoStep({
       disabled={disabled}
       onClick={onClick}
       aria-current={active ? "step" : undefined}
-      className={`flex items-center gap-1.5 rounded-[6px] px-1 py-1 text-left text-[13px] ${disabled ? "cursor-not-allowed opacity-40" : "hover:bg-[#F3F4F6]"} ${active ? "font-medium text-[#111827]" : "text-[#4B5563]"}`}
+      className={`flex items-center gap-2 rounded-[4px] px-1 py-1 text-left text-[13px] ${disabled ? "cursor-not-allowed opacity-40" : "hover:bg-sb-hover"} ${active ? "font-medium text-sb-ink" : "text-sb-secondary"}`}
     >
       <span
         data-testid={`${testId}-mark`}
         data-state={done ? "done" : active ? "current" : "todo"}
         className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[11px] font-medium tabular-nums ${
-          done ? "border-[#067647] text-[#067647]" : active ? "border-[#0070E0] bg-[#0070E0] text-white" : "border-[#D1D5DB] text-[#6B7280]"
+          done ? "border-[#067647] text-[#067647]" : active ? "border-[#0070E0] bg-[#0070E0] text-white" : "border-[#C3CFDB] text-sb-muted"
         }`}
       >
-        {done ? "✓" : index}
+        {done ? <Check size={12} strokeWidth={2.25} /> : index}
       </span>
       <span className="whitespace-nowrap">{label}</span>
     </button>
   );
 }
 
-function NavItem({ label, aside, soon, active, onClick }: { label: string; aside?: string; soon?: string; active: boolean; onClick: () => void }) {
+function NavItem({ icon, label, aside, soon, active, onClick }: { icon: React.ReactNode; label: string; aside?: string; soon?: string; active: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-current={active ? "page" : undefined}
-      className={`flex h-8 items-center gap-2 rounded-[6px] px-2 text-left text-[13px] ${active ? "bg-[#F3F4F6] font-medium text-[#111827]" : "text-[#4B5563] hover:bg-[#F9FAFB]"}`}
+      className={`flex h-8 items-center gap-2 rounded-[4px] px-2 text-left text-[13px] ${active ? "bg-sb-hover font-medium text-sb-brand" : "text-sb-secondary hover:bg-sb-hover"}`}
     >
+      <span className="text-current">{icon}</span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {aside && !soon ? <span className="text-[11px] text-[#9CA3AF]">{aside}</span> : null}
-      {soon ? <span className="text-[11px] text-[#9CA3AF]">{soon}</span> : null}
+      {aside && !soon ? <span className="text-[12px] text-sb-muted">{aside}</span> : null}
+      {soon ? <span className="text-[12px] text-sb-muted">{soon}</span> : null}
     </button>
   );
 }
 
 function Placeholder({ title, body, note }: { title: string; body: string; note: string }) {
   return (
-    <div className="px-4 py-4">
-      <h1 className="text-[18px] font-semibold tracking-tight">{title}</h1>
-      <p className="mt-1 text-[13px] text-[#6B7280]">{body}</p>
-      <p className="mt-3 text-[13px] text-[#9CA3AF]">{note}</p>
+    <div className="px-4 py-6">
+      <h1 className="text-[20px] font-semibold tracking-tight">{title}</h1>
+      <p className="mt-2 text-[14px] text-sb-muted">{body}</p>
+      <p className="mt-4 text-[13px] text-sb-faint">{note}</p>
     </div>
   );
 }
@@ -1020,11 +1094,14 @@ function orderRef(order: Pick<Order, "id" | "invoiceId">) {
   return order.invoiceId || order.id;
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+function Field({ label, value, waybill, copyValue, copiedLabel }: { label: string; value: string; waybill?: boolean; copyValue?: string; copiedLabel?: string }) {
+  const showChip = Boolean(waybill && copiedLabel && value && value !== "–" && value !== "—");
   return (
     <div className="min-w-0">
-      <dt className="text-[11px] text-[#9CA3AF]">{label}</dt>
-      <dd className="truncate text-[13px] font-medium tabular-nums text-[#111827]">{value}</dd>
+      <dt className="sb-field-label">{label}</dt>
+      <dd className="mt-1 truncate text-[13px] font-medium text-sb-ink">
+        {showChip ? <Waybill value={value} copyValue={copyValue} copiedLabel={copiedLabel || ""} /> : value}
+      </dd>
     </div>
   );
 }
@@ -1032,8 +1109,8 @@ function Field({ label, value }: { label: string; value: string }) {
 function Block({ title, body }: { title: string; body: string }) {
   return (
     <div>
-      <h4 className="text-[11px] font-medium text-[#6B7280]">{title}</h4>
-      <p className="text-[#111827]">{body}</p>
+      <h4 className="text-[12px] font-medium text-sb-muted">{title}</h4>
+      <p className="text-sb-ink">{body}</p>
     </div>
   );
 }
@@ -1041,14 +1118,14 @@ function Block({ title, body }: { title: string; body: string }) {
 function Skeleton({ label }: { label: string }) {
   return (
     <div className="h-full" data-testid="grid-skeleton" aria-busy="true" aria-label={label}>
-      <div className="flex h-[34px] items-center gap-3 border-b border-[#E5E7EB] bg-[#F9FAFB] px-3">
+      <div className="flex h-8 items-center gap-3 border-b border-sb-line bg-[#F4F7FA] px-3">
         <div className="sb-skeleton-bar w-24" />
         <div className="sb-skeleton-bar w-16" />
         <div className="sb-skeleton-bar w-28" />
         <div className="sb-skeleton-bar w-20" />
       </div>
       {Array.from({ length: 8 }, (_, index) => (
-        <div key={index} className="flex h-9 items-center gap-3 border-b border-[#E5E7EB] px-3">
+        <div key={index} className="flex h-10 items-center gap-3 border-b border-[#E3EAF1] px-3">
           <div className="sb-skeleton-bar w-4" />
           <div className="sb-skeleton-bar w-28" />
           <div className="sb-skeleton-bar w-16" />
@@ -1062,29 +1139,13 @@ function Skeleton({ label }: { label: string }) {
   );
 }
 
-function Mark() {
+function WaybillArt() {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M1.5 10.5V6.5M14.5 10.5V6.5" stroke="#003087" strokeWidth="1.5" strokeLinecap="square" />
-      <path d="M1.5 8.5h13" stroke="#003087" strokeWidth="1.5" />
-      <path d="M4 8.5c.4-2.2 2.2-3.4 4-3.4s3.6 1.2 4 3.4" fill="none" stroke="#0070E0" strokeWidth="1.5" />
-    </svg>
-  );
-}
-
-function EmptyIcon() {
-  return (
-    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <rect x="5" y="4" width="22" height="24" rx="2" stroke="#9CA3AF" strokeWidth="1.5" />
-      <path d="M9 11h14M9 16h14M9 21h8" stroke="#9CA3AF" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-      <path d="M3 3l8 8M11 3L3 11" stroke="currentColor" strokeWidth="1.5" />
+    <svg width="88" height="56" viewBox="0 0 88 56" fill="none" aria-hidden="true">
+      <path d="M8 8h46v40H8V8z" stroke="#003087" strokeWidth="1.5" />
+      <path d="M14 16h28M14 22h34M14 28h22" stroke="#5C6E84" strokeWidth="1.5" />
+      <rect x="14" y="34" width="28" height="8" stroke="#0070E0" strokeWidth="1.25" strokeDasharray="2 2" />
+      <path d="M58 24h18M68 19l8 5-8 5" stroke="#003087" strokeWidth="1.5" />
     </svg>
   );
 }
