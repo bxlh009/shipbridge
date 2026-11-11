@@ -36,3 +36,5 @@ Updated 2026-11-11 after a local mock-mode run.
 - Point `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` at an OpenAI-compatible model and retry a manifest screenshot plus an ambiguous-row explanation.
 - Persist the mock store if this is deployed on Vercel (serverless instances do not share memory).
 - Carrier delivery webhooks and an item-not-received evidence pack.
+- UI nit: after sync, the "Payments on hold" card still shows 10. It could show "released after delivery: N" so the drop is visible in the demo video.
+- Hackathon deliverables that still need the user: a PayPal developer sandbox app (client id/secret), a public GitHub repo + push, a Vercel deploy, and a ≤3 min English YouTube demo.
