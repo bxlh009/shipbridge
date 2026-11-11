@@ -55,10 +55,10 @@ Shopify sync apps do not cover independent sites, social checkout, or invoice se
 - Upload CSV or XLSX. YunExpress, 4PX, and Yanwen headers are recognized, including 运单号 / 收件人 / 邮编 / 国家 / 品名. Rows normalize to tracking number, carrier, recipient, postcode, country, city, item, quantity, and reference.
 - Screenshot upload calls an OpenAI-compatible vision chat with an `image_url` data URL. With no LLM key the API returns a clear message and points at the samples.
 - Deterministic matcher: name similarity (case, diacritics, token order), postcode exact or prefix, country, item keyword overlap, invoice / reference exact match. Score is 0–100 with reasons. Optional LLM adjudication for scores 40–80, ignored if the call fails.
-- AG Grid Community grid: tracking, carrier, recipient, PayPal order, buyer, confidence badge, address check, sync status, and an override dropdown. Checkbox selection. Postcode or country mismatches are red and show “Seller Protection risk: ship only to PayPal address.”
-- **Sync tracking to PayPal** writes selected rows, or, if nothing is selected, confident non-red rows. Red rows sync only when the seller checks them. Primary call is Orders v2 `POST /v2/checkout/orders/{id}/track`. Fallback is `POST /v1/shipping/trackers-batch`. A row turns green “verified in PayPal” only after a read-back contains the tracking number.
-- Dashboard: order count, simulated payments on hold, amount on hold, amount releasing early, tracking synced, and estimated days released earlier versus a 21-day hold (ship date + transit days by carrier and country + 1). After a verified sync the on-hold count counts down and the releasing-early amount counts up, with a short highlight. A **Simulated** badge states that the PayPal sandbox has no real holds.
-- Buyer panel: paste an English “where is my order” email, auto-detect the order, get a Chinese brief and an English reply with carrier, tracking number, and a **simulated** timeline. Copy button. Template fallback when no LLM key is set.
+- AG Grid Community (Quartz, compact): tracking, carrier, recipient, postcode, buyer, order, confidence (number and bar), status pill, address check, country, override, and a reply action. Checkbox selection. A postcode or country mismatch gets a red cell and a left row marker, with the Seller Protection reason on the tooltip. The row is not filled red.
+- **Push tracking** writes selected rows, or, if nothing is selected, confident non-risk rows. Risk rows sync only when the seller checks them. Primary call is Orders v2 `POST /v2/checkout/orders/{id}/track`. Fallback is `POST /v1/shipping/trackers-batch`. A repeat push is a success when read-back already finds the number, including PayPal “already exists” errors. A row shows “Verified in PayPal” only after that read-back.
+- Shipments desk: payments on hold, releasing early, disputes avoided (estimate), and tracking coverage. After a verified sync the on-hold count counts down and the releasing-early amount counts up, with a short count and a green tint. A **Simulated** tag states that the PayPal sandbox has no real holds. Days released earlier (ship date + transit days by carrier and country + 1) sit under releasing early.
+- Buyer message drawer: paste an English “where is my order” email, auto-detect the order, get a Chinese brief and an English reply with carrier, tracking number, and a **simulated** timeline. Copy button. Template fallback when no LLM key is set.
 - Agent mode route `POST /api/agent`. With an LLM key, the Vercel AI SDK (`ai` + `@ai-sdk/openai-compatible`) receives tools named `get_order`, `create_shipment_tracking`, and `get_shipment_tracking`. In sandbox or live mode those names are filled by `@paypal/agent-toolkit` (`PayPalAgentToolkit` from `@paypal/agent-toolkit/ai-sdk`) when the package loads, and ShipBridge’s direct client remains as a fallback. With no key, the same tools run deterministically so the demo still finishes.
 - `PAYPAL_MODE=mock` (also the default when `PAYPAL_CLIENT_ID` is empty) serves ten captured SAMPLE orders from a fixed catalog. The browser keeps those orders, including trackers, in `localStorage`. **Reset demo** clears that copy. Mock API routes are stateless: sync and read-back send the current orders and get the next copy back. Read-back is true only when the returned order contains that tracking number. Sandbox and live mode still call PayPal REST on the server.
 
@@ -122,13 +122,13 @@ Open http://localhost:3000. The app runs with an empty `.env`. Mock mode is sele
 
 ### Mock demo
 
-1. The header chips should read `PayPal: mock` and `AI: off (rules)`.
-2. Click **Use sample**. That loads all three SAMPLE files (10 rows).
-3. Click **Match PayPal orders**. Emily Carter and the other exact rows match. Micheal Obrien matches Michael O'Brien. Chloe Davis matches Chloe Davies. Anna Schmidt is red because the manifest postcode is 10117 and PayPal has 10115. Noah Bennett has no order.
-4. Click **Sync tracking to PayPal**. Confident rows turn green after read-back. Payments on hold counts down (10 → 2 in the sample: Anna Schmidt and the unmatched catalog order stay on hold) and Releasing early counts up, labeled release pending delivery. Anna stays skipped until her checkbox is selected and you sync again.
-5. Paste a “where is my order” email that mentions SB-1001, or click **Sample email**, then **Draft reply**.
+1. The top bar should read `Mock` and `AI off · rules`.
+2. Click **Load sample manifest** (or step 1, Upload manifest). That loads all three SAMPLE files (10 rows).
+3. Click **Run matching**. Emily Carter and the other exact rows match. Micheal Obrien matches Michael O'Brien. Chloe Davis matches Chloe Davies. Anna Schmidt’s postcode cell is marked because the manifest says 10117 and PayPal has 10115. Noah Bennett has no order.
+4. Click **Push tracking**. Confident rows show Verified in PayPal after read-back. Payments on hold counts down (10 → 2 in the sample: Anna Schmidt and the unmatched catalog order stay on hold) and Releasing early counts up. Anna stays skipped until her checkbox is selected and you sync again.
+5. Open **Buyer message**, paste a “where is my order” email that mentions SB-1001, or click **Sample email**, then **Draft reply**.
 
-The same three actions are the hero steps: **Load sample → Match → Sync**. The current step is highlighted, later steps stay disabled until the earlier one finishes, and a check marks each finished step.
+The toolbar stepper is **Upload manifest → Review matches → Push tracking to PayPal**. The current step is highlighted, later steps stay disabled until the earlier one finishes, and a check marks each finished step. The primary button follows the same step.
 
 `POST /api/seed` returns a fresh catalog and stores nothing. **Reset demo** clears `localStorage` and loads that catalog again. A serverless instance can restart between clicks without losing the demo, because the browser sends the current orders with the next sync or read-back.
 
@@ -194,7 +194,21 @@ node scripts/verify.mjs
 node scripts/screenshot.mjs
 ```
 
-`PAYPAL_MODE=mock` has to be in the shell when `.env.local` selects sandbox. Process env wins, which is what keeps this run in mock mode. `scripts/verify.mjs` expects the app on port 3000 and prints `PASS` / `FAIL` lines. Screenshots land in `screenshots/`. The after-sync shot waits until the count-up sets `data-settled="true"` and the releasing-early figure matches the `$0.00 → …` line.
+`PAYPAL_MODE=mock` has to be in the shell when `.env.local` selects sandbox. Process env wins, which is what keeps this run in mock mode. `scripts/verify.mjs` expects the app on port 3000 and prints `PASS` / `FAIL` lines. Screenshots land in `screenshots/` at 1440×900. The after-sync shot waits until the count-up sets `data-settled="true"` and the releasing-early figure matches the `$0.00 → …` line.
+
+## Screenshots
+
+| File | What it shows |
+| --- | --- |
+| `screenshots/home.png` | Empty shipments desk, before a manifest |
+| `screenshots/hero.png` | Page title and the four KPI tiles |
+| `screenshots/matched-grid.png` | Matched rows, including the postcode mismatch |
+| `screenshots/after-sync.png` | Verified rows, settled KPI deltas, sync toast |
+| `screenshots/buyer-drawer.png` | Buyer drawer with the Chinese brief and English draft |
+| `screenshots/chinese.png` | 中文 after sync |
+| `screenshots/sandbox-synced.png` | Sandbox environment pill after a real read-back |
+
+`SHIPBRIDGE_URL=http://127.0.0.1:3001 node scripts/screenshot.mjs --sandbox` writes the sandbox shot. The mock script removes `buyer-reply.png` and `synced.png` if they are still on disk.
 
 Regenerate the 4PX workbook with `npm run samples` after editing `scripts/generate-samples.mjs`.
 
@@ -212,10 +226,10 @@ The timeline in the buyer reply is the same kind of estimate. It is labeled simu
 ## Demo script (about 2.5 minutes)
 
 1. **0:00** A Chinese one-person shop has PayPal orders and the money looks frozen for 21 days. Say that China is a large PayPal cross-border merchant base, and that Shopify-only sync apps do not cover this seller.
-2. **0:25** Open ShipBridge. Point at `PayPal: mock`, `AI: off (rules)`, and the Simulated badge. The sandbox cannot freeze funds, so the hold numbers are an estimate.
-3. **0:40** Click **Use sample**. Mention the files are fake SAMPLE exports from YunExpress, 4PX, and Yanwen, including Chinese headers.
-4. **1:05** Click **Match PayPal orders**. Show a high-confidence exact match, the Micheal / Michael typo, and the red Anna Schmidt row: postcode 10117 versus PayPal 10115. Read the Seller Protection line: ship only to the PayPal address. Noah Bennett has no order.
-5. **1:30** Click **Sync tracking to PayPal**. Red rows are skipped. Green rows say verified in PayPal because the app read the tracking number back. Payments on hold counts down and Releasing early counts up, both labeled Simulated. Optionally check Anna and sync her on purpose.
+2. **0:25** Open ShipBridge. Point at `Mock`, `AI off · rules`, and the Simulated tag. The sandbox cannot freeze funds, so the hold numbers are an estimate.
+3. **0:40** Click **Load sample manifest**. Mention the files are fake SAMPLE exports from YunExpress, 4PX, and Yanwen, including Chinese headers.
+4. **1:05** Click **Run matching**. Show a high-confidence exact match, the Micheal / Michael typo, and Anna Schmidt’s postcode cell: 10117 versus PayPal 10115. Read the Seller Protection line: ship only to the PayPal address. Noah Bennett has no order.
+5. **1:30** Click **Push tracking**. Risk rows are skipped. Verified rows say verified in PayPal because the app read the tracking number back. Payments on hold counts down and Releasing early counts up. Optionally check Anna and sync her on purpose.
 6. **1:55** Paste “Where is my order??” for Emily Carter / SB-1001. Show the Chinese brief (mood, ask, dispute risk) and the English reply with carrier, tracking number, and the labeled demo timeline. Hit copy.
 7. **2:20** Close on the PayPal outcome: fewer item-not-received disputes, faster release after delivery, less support, and a reason for cross-border merchants to stay.
 8. **2:35** Stop. Keep the video under three minutes.

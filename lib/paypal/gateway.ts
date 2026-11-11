@@ -45,6 +45,18 @@ async function addAndReadLive(input: TrackingWrite): Promise<AddTrackingResult> 
   if (!input.captureId) {
     return { ok: false, via: "orders_v2", error: "Order is not captured yet. Approve and capture it in the sandbox first.", verified: false };
   }
+  // A repeat push is success when the number is already on the order.
+  const present = await readBackPaypalTracking(input.orderId, input.captureId, input.trackingNumber);
+  if (present) {
+    return {
+      ok: true,
+      via: "read_back",
+      verified: true,
+      carrierRequested: input.carrier,
+      carrierUsed: input.carrier,
+      carrierFallback: false,
+    };
+  }
   const written = await addPaypalTracking(input);
   const verified = await readBackPaypalTracking(input.orderId, input.captureId, input.trackingNumber);
   const record: TrackingRecord = {

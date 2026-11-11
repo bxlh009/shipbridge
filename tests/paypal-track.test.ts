@@ -14,6 +14,7 @@ describe("PayPal tracking errors", () => {
 
   it("recognizes a tracker that is already on the order", () => {
     expect(isAlreadyTracked({ details: [{ issue: "TRACKING_NUMBER_ALREADY_ADDED", description: "Tracking already added." }] })).toBe(true);
+    expect(isAlreadyTracked({ name: "UNPROCESSABLE_ENTITY", message: "Tracking number already exists" })).toBe(true);
     expect(isAlreadyTracked({ message: "The order is not captured." })).toBe(false);
   });
 });

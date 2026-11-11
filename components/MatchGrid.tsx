@@ -6,73 +6,222 @@ import {
   AllCommunityModule,
   ModuleRegistry,
   themeQuartz,
+  type CellClassParams,
   type ColDef,
   type ICellRendererParams,
   type RowSelectionOptions,
 } from "ag-grid-community";
 import type { Copy } from "@/lib/i18n";
-import { SELLER_PROTECTION_WARNING, type GridRow, type Order } from "@/lib/types";
+import { countryMismatch, postcodeMismatch } from "@/lib/matcher";
+import type { GridRow, Order } from "@/lib/types";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
+const FONT = 'Inter, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", system-ui, sans-serif';
+
 const theme = themeQuartz.withParams({
-  headerBackgroundColor: "#003087",
-  headerTextColor: "#ffffff",
-  accentColor: "#0070ba",
-  borderColor: "#d7e2f0",
+  spacing: 4,
+  fontSize: 13,
+  headerFontSize: 12,
+  headerFontWeight: 600,
+  dataFontSize: 13,
+  fontFamily: FONT,
+  headerBackgroundColor: "#F9FAFB",
+  headerTextColor: "#4B5563",
+  foregroundColor: "#111827",
+  backgroundColor: "#FFFFFF",
+  oddRowBackgroundColor: "#FFFFFF",
+  accentColor: "#0070E0",
+  borderColor: "#E5E7EB",
+  rowHoverColor: "#F9FAFB",
+  selectedRowBackgroundColor: "#F3F8FE",
   browserColorScheme: "light",
-  fontFamily: "Segoe UI, PingFang SC, Noto Sans SC, sans-serif",
+  wrapperBorder: false,
+  wrapperBorderRadius: 0,
+  borderRadius: 0,
+  rowHeight: 36,
+  headerHeight: 34,
+  iconSize: 14,
+  cellHorizontalPaddingScale: 0.55,
+  rowVerticalPaddingScale: 0.65,
 });
 
-function ConfidenceCell(props: ICellRendererParams<GridRow>) {
-  const value = props.value as number;
-  const risk = props.data?.addressRisk;
-  const tone = risk ? "bg-red-100 text-red-800" : value >= 80 ? "bg-emerald-100 text-emerald-800" : value >= 50 ? "bg-amber-100 text-amber-900" : "bg-slate-100 text-slate-600";
+const RISK_BG = { backgroundColor: "#FEF2F2" };
+
+type GridContext = {
+  orders: Order[];
+  copy: Copy;
+  matched: boolean;
+  onOverride: (rowId: string, orderId: string) => void;
+  onReply: (row: GridRow) => void;
+};
+
+function orderFor(row: GridRow | undefined, orders: Order[]): Order | undefined {
+  if (!row?.matchedOrderId) return undefined;
+  return orders.find((item) => item.id === row.matchedOrderId);
+}
+
+function mismatchTitle(row: GridRow, order: Order | undefined, copy: Copy): string {
+  if (!order) return row.addressWarning || "";
+  if (postcodeMismatch(row.postcode, order.postalCode)) {
+    return copy.mismatchPost.replace("{a}", row.postcode || "—").replace("{b}", order.postalCode || "—");
+  }
+  if (countryMismatch(row.country, order.country)) {
+    return copy.mismatchCountry.replace("{a}", row.country || "—").replace("{b}", order.country || "—");
+  }
+  return row.addressWarning || "";
+}
+
+function riskCellStyle(params: CellClassParams<GridRow, unknown>) {
+  const ctx = params.context as GridContext;
+  const row = params.data;
+  const order = orderFor(row, ctx?.orders || []);
+  if (!row || !order || !row.addressRisk) return undefined;
+  const field = params.colDef.field;
+  if (field === "postcode" && postcodeMismatch(row.postcode, order.postalCode)) return RISK_BG;
+  if (field === "country" && countryMismatch(row.country, order.country)) return RISK_BG;
+  if (!field && row.addressRisk) return RISK_BG;
+  return undefined;
+}
+
+function Pill({ tone, title, children }: { tone: "green" | "gray" | "red" | "amber" | "outline"; title?: string; children: string }) {
+  const tones = {
+    green: "border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]",
+    gray: "border-[#E5E7EB] bg-[#F3F4F6] text-[#374151]",
+    red: "border-[#FECACA] bg-[#FEF2F2] text-[#B91C1C]",
+    amber: "border-[#FDE68A] bg-[#FFFBEB] text-[#B45309]",
+    outline: "border-[#D1D5DB] bg-white text-[#6B7280]",
+  };
   return (
-    <span title={(props.data?.reasons || []).join("\n")} className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${tone}`}>
-      {value || 0}
+    <span title={title} className={`inline-flex max-w-full items-center truncate rounded-[4px] border px-1.5 py-px text-[11px] font-medium leading-[18px] ${tones[tone]}`}>
+      {children}
     </span>
   );
 }
 
-function AddressCell(props: ICellRendererParams<GridRow>) {
-  if (props.data?.addressRisk && props.data.matchedOrderId) {
+function ConfidenceCell(props: ICellRendererParams<GridRow, number, GridContext>) {
+  const value = Number(props.value) || 0;
+  const tone = value >= 80 ? "#067647" : value >= 50 ? "#B45309" : "#9CA3AF";
+  return (
+    <span title={(props.data?.reasons || []).join("\n")} className="flex w-full items-center gap-1.5">
+      <span className="w-7 shrink-0 text-right text-[13px] tabular-nums text-[#111827]">{value}</span>
+      <span className="h-[3px] min-w-0 flex-1 bg-[#E5E7EB]">
+        <span className="block h-full" style={{ width: `${Math.max(0, Math.min(100, value))}%`, background: tone }} />
+      </span>
+    </span>
+  );
+}
+
+function AddressCell(props: ICellRendererParams<GridRow, unknown, GridContext>) {
+  const row = props.data;
+  const copy = props.context.copy;
+  if (!row?.matchedOrderId) return <span className="text-[12px] text-[#9CA3AF]">—</span>;
+  const order = orderFor(row, props.context.orders);
+  if (row.addressRisk) {
+    const title = mismatchTitle(row, order, copy);
     return (
-      <span title={SELLER_PROTECTION_WARNING} className="text-xs font-semibold text-red-700">
-        PayPal address mismatch
+      <span title={title} data-mismatch="address" className="text-[12px] font-medium text-[#B91C1C]">
+        {copy.addressBad}
       </span>
     );
   }
-  if (props.data?.matchedOrderId) return <span className="text-xs text-emerald-700">{props.context.okLabel}</span>;
-  return <span className="text-xs text-slate-400">—</span>;
+  return <span className="text-[12px] text-[#4B5563]">{copy.addressOk}</span>;
 }
 
-function SyncCell(props: ICellRendererParams<GridRow>) {
-  const status = props.data?.syncStatus;
-  if (status === "verified") return <span className="text-xs font-semibold text-emerald-700">✓ verified in PayPal</span>;
-  if (status === "failed") return <span className="text-xs text-red-700">{props.data?.syncMessage || "Failed"}</span>;
-  if (status === "skipped") return <span className="text-xs text-amber-800">{props.data?.syncMessage || "Skipped"}</span>;
-  if (status === "unverified") return <span className="text-xs text-amber-800">{props.data?.syncMessage}</span>;
-  return <span className="text-xs text-slate-400">—</span>;
+function PostcodeCell(props: ICellRendererParams<GridRow, string, GridContext>) {
+  const row = props.data;
+  const order = orderFor(row, props.context.orders);
+  const mismatch = Boolean(row && order && postcodeMismatch(row.postcode, order.postalCode));
+  const title = row && mismatch ? mismatchTitle(row, order, props.context.copy) : undefined;
+  return (
+    <span title={title} data-mismatch={mismatch ? "postcode" : undefined} className="tabular-nums">
+      {props.value || "—"}
+    </span>
+  );
 }
 
-function OverrideCell(props: ICellRendererParams<GridRow>) {
-  const orders = (props.context.orders || []) as Order[];
+function orderLabel(order: Order) {
+  if (order.id.length <= 12) return order.id;
+  return order.invoiceId || order.id;
+}
+
+function OrderCell(props: ICellRendererParams<GridRow, string, GridContext>) {
+  const id = props.value || "";
+  if (!id) return <span className="text-[#9CA3AF]">—</span>;
+  const order = (props.context.orders || []).find((item) => item.id === id);
+  const label = order ? orderLabel(order) : id;
+  const title = order && label !== order.id ? `${order.invoiceId} · ${order.id}` : id;
+  return (
+    <span title={title} className="tabular-nums">
+      {label}
+    </span>
+  );
+}
+
+function CountryCell(props: ICellRendererParams<GridRow, string, GridContext>) {
+  const row = props.data;
+  const order = orderFor(row, props.context.orders);
+  const mismatch = Boolean(row && order && countryMismatch(row.country, order.country));
+  const title = row && mismatch ? props.context.copy.mismatchCountry.replace("{a}", row.country || "—").replace("{b}", order?.country || "—") : undefined;
+  return (
+    <span title={title} data-mismatch={mismatch ? "country" : undefined}>
+      {props.value || "—"}
+    </span>
+  );
+}
+
+function StatusCell(props: ICellRendererParams<GridRow, unknown, GridContext>) {
+  const row = props.data;
+  const copy = props.context.copy;
+  if (!row) return null;
+  if (row.syncStatus === "verified") return <Pill tone="green">{copy.statusVerified}</Pill>;
+  if (row.syncStatus === "failed") return <Pill tone="red" title={row.syncMessage}>{copy.statusFailed}</Pill>;
+  if (row.syncStatus === "unverified") return <Pill tone="amber" title={row.syncMessage}>{copy.statusUnverified}</Pill>;
+  if (row.syncStatus === "skipped" && !row.matchedOrderId) return <Pill tone="outline" title={row.syncMessage}>{copy.statusNoMatch}</Pill>;
+  if (row.syncStatus === "skipped" && row.addressRisk) return <Pill tone="red" title={row.syncMessage || row.addressWarning}>{copy.statusSkippedRisk}</Pill>;
+  if (row.syncStatus === "skipped") return <Pill tone="amber" title={row.syncMessage}>{copy.statusSkipped}</Pill>;
+  if (row.matchedOrderId && row.addressRisk) return <Pill tone="red" title={row.addressWarning}>{copy.statusRisk}</Pill>;
+  if (row.matchedOrderId) return <Pill tone="gray">{copy.statusReady}</Pill>;
+  if (props.context.matched) return <Pill tone="outline">{copy.statusNoMatch}</Pill>;
+  return <span className="text-[12px] text-[#9CA3AF]">—</span>;
+}
+
+function OverrideCell(props: ICellRendererParams<GridRow, unknown, GridContext>) {
+  const orders = props.context.orders;
   return (
     <select
       aria-label="Override match"
-      className="h-8 max-w-full rounded border border-slate-200 bg-white px-1 text-xs"
+      className="h-7 w-full max-w-full rounded-[4px] border border-[#E5E7EB] bg-white px-1 text-[12px]"
       value={props.data?.matchedOrderId || ""}
       onMouseDown={(event) => event.stopPropagation()}
-      onChange={(event) => props.context.onOverride(props.data?.id, event.target.value)}
+      onClick={(event) => event.stopPropagation()}
+      onChange={(event) => props.context.onOverride(props.data?.id || "", event.target.value)}
     >
-      <option value="">{props.context.noMatch}</option>
+      <option value="">{props.context.copy.noMatch}</option>
       {orders.map((order) => (
-        <option key={order.id} value={order.id}>
-          {order.id} · {order.buyerName}
+        <option key={order.id} value={order.id} title={`${order.invoiceId || order.id} · ${order.id} · ${order.buyerName}`}>
+          {orderLabel(order)}
         </option>
       ))}
     </select>
+  );
+}
+
+function ReplyCell(props: ICellRendererParams<GridRow, unknown, GridContext>) {
+  if (!props.data) return null;
+  return (
+    <button
+      type="button"
+      title={props.context.copy.reply}
+      className="whitespace-nowrap text-[12px] font-medium text-[#0070E0] hover:underline"
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (props.data) props.context.onReply(props.data);
+      }}
+    >
+      {props.context.copy.reply}
+    </button>
   );
 }
 
@@ -87,51 +236,72 @@ export default function MatchGrid({
   rows,
   orders,
   copy,
+  matched,
   onOverride,
+  onReply,
   onSelection,
 }: {
   rows: GridRow[];
   orders: Order[];
   copy: Copy;
+  matched: boolean;
   onOverride: (rowId: string, orderId: string) => void;
+  onReply: (row: GridRow) => void;
   onSelection: (ids: string[]) => void;
 }) {
   const columnDefs = useMemo<ColDef<GridRow>[]>(
     () => [
-      { field: "trackingNumber", headerName: copy.colTracking, width: 172, minWidth: 172, suppressSizeToFit: true },
-      { field: "carrier", headerName: copy.colCarrier, minWidth: 108, flex: 0.8 },
-      { field: "recipientName", headerName: copy.colRecipient, minWidth: 126, flex: 1 },
-      { field: "matchedOrderId", headerName: copy.colOrder, minWidth: 118, flex: 0.85 },
-      { field: "buyerName", headerName: copy.colBuyer, minWidth: 124, flex: 1 },
-      { field: "confidence", headerName: copy.colConfidence, minWidth: 112, maxWidth: 130, cellRenderer: ConfidenceCell },
-      { headerName: copy.colAddress, minWidth: 168, flex: 1.2, cellRenderer: AddressCell },
-      { headerName: copy.colSync, minWidth: 168, flex: 1.15, cellRenderer: SyncCell },
-      { field: "postcode", headerName: copy.colPostcode, minWidth: 96, maxWidth: 120 },
-      { field: "country", headerName: copy.colCountry, minWidth: 88, maxWidth: 100 },
-      { headerName: copy.colOverride, minWidth: 168, flex: 1.1, cellRenderer: OverrideCell },
+      { field: "trackingNumber", headerName: copy.colTracking, width: 140, minWidth: 140, maxWidth: 150, suppressSizeToFit: true, suppressAutoSize: true },
+      { field: "carrier", headerName: copy.colCarrier, width: 88, minWidth: 88 },
+      { field: "recipientName", headerName: copy.colRecipient, minWidth: 112, flex: 1 },
+      {
+        field: "postcode",
+        headerName: copy.colPostcode,
+        width: 82,
+        minWidth: 82,
+        suppressSizeToFit: true,
+        cellRenderer: PostcodeCell,
+        cellStyle: riskCellStyle,
+      },
+      { field: "buyerName", headerName: copy.colBuyer, minWidth: 112, flex: 1 },
+      { field: "matchedOrderId", headerName: copy.colOrder, width: 84, minWidth: 84, cellRenderer: OrderCell },
+      { field: "confidence", headerName: copy.colConfidence, width: 88, minWidth: 88, cellRenderer: ConfidenceCell },
+      { headerName: copy.colSync, width: 140, minWidth: 140, suppressSizeToFit: true, cellRenderer: StatusCell },
+      { headerName: copy.colAddress, width: 78, minWidth: 78, cellRenderer: AddressCell, cellStyle: riskCellStyle },
+      { field: "country", headerName: copy.colCountry, width: 68, minWidth: 68, cellRenderer: CountryCell, cellStyle: riskCellStyle },
+      { headerName: copy.colOverride, width: 104, minWidth: 104, suppressSizeToFit: true, cellRenderer: OverrideCell, sortable: false },
+      {
+        headerName: "",
+        width: 104,
+        minWidth: 104,
+        maxWidth: 104,
+        pinned: "right",
+        suppressSizeToFit: true,
+        cellRenderer: ReplyCell,
+        sortable: false,
+        resizable: false,
+      },
     ],
     [copy],
   );
 
+  const context = useMemo<GridContext>(() => ({ orders, copy, matched, onOverride, onReply }), [orders, copy, matched, onOverride, onReply]);
+
   return (
-    <div className="h-[460px] w-full" data-testid="match-grid">
+    <div className="h-full w-full" data-testid="match-grid">
       <AgGridReact<GridRow>
         theme={theme}
         rowData={rows}
         columnDefs={columnDefs}
         getRowId={(params) => params.data.id}
         rowSelection={rowSelection}
-        context={{ orders, onOverride, okLabel: copy.addressOk, noMatch: copy.noMatch }}
-        getRowStyle={(params) => {
-          if (params.data?.addressRisk && params.data.matchedOrderId) return { backgroundColor: "#fee2e2" };
-          if (params.data?.syncStatus === "verified") return { backgroundColor: "#dcfce7" };
-          return undefined;
-        }}
+        selectionColumnDef={{ width: 36, minWidth: 36, maxWidth: 36, pinned: "left", suppressSizeToFit: true }}
+        context={context}
+        rowClassRules={{ "sb-risk": (params) => Boolean(params.data?.addressRisk && params.data?.matchedOrderId) }}
         onSelectionChanged={(event) => onSelection(event.api.getSelectedRows().map((row) => row.id))}
-        onFirstDataRendered={(event) => event.api.sizeColumnsToFit()}
-        onGridSizeChanged={(event) => event.api.sizeColumnsToFit()}
-        defaultColDef={{ sortable: true, resizable: true }}
-        animateRows
+        defaultColDef={{ sortable: true, resizable: true, suppressHeaderMenuButton: true }}
+        animateRows={false}
+        tooltipShowDelay={200}
       />
     </div>
   );

@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "ShipBridge",
-  description: "Match Chinese carrier manifests to PayPal orders and sync tracking in bulk.",
+  description: "Match carrier manifests to PayPal orders and push tracking in bulk.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

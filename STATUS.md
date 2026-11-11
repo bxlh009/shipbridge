@@ -1,20 +1,20 @@
 # ShipBridge status
 
-Updated 2026-11-11 after a local mock-mode run.
+Updated 2026-11-12 after the ops-desk visual pass (mock and sandbox).
 
 ## Built
 
-- Next.js App Router + TypeScript + Tailwind UI with EN / 中文 toggle, PayPal-blue hero, simulated-hold banner, and stat cards.
-- Hero pitch for PayPal (fewer item-not-received disputes, faster release, keeping cross-border merchants) plus a subline for Chinese sellers on YunExpress, 4PX, and Yanwen. Guided demo: Load sample → Match → Sync. The current step is highlighted, later steps stay disabled, and a check marks each finished step. Both languages.
+- Next.js App Router + TypeScript + Tailwind UI. Dense shipments desk: left nav, merchant bar, environment pill, EN / 中文 toggle, four KPI tiles, inline stepper, AG Grid quartz (v33 Theming API), buyer drawer, empty state, and toasts. Page background `#F6F7F9`, 1px gray borders, 6px radius, PayPal blue `#0070E0` only on actions and the current step.
+- Page title “Shipments” with one operational subtitle. Guided demo stays Load sample → Match → Push tracking. The current step is accent, finished steps show a check. Both languages.
 - Manifest parser for YunExpress, 4PX, and Yanwen CSV/XLSX, including Chinese headers. Screenshot path calls an OpenAI-compatible vision chat and, with no key, returns `LLM_UNAVAILABLE` plus the sample list.
 - SAMPLE files in `public/samples/`: `yunexpress-sample.csv`, `4px-sample.xlsx`, `yanwen-sample.csv`. Buyers are fake. They line up with mock orders SB-1001–SB-1009. Noah Bennett has no order. Anna Schmidt’s postcode 10117 does not match PayPal 10115. Micheal Obrien and Chloe Davis are name variants.
 - Deterministic matcher (name, postcode, country, item, invoice id) and optional LLM adjudication that fails soft.
-- AG Grid Community review grid with checkbox selection, confidence badge, red Seller Protection rows, override dropdown, and green “verified in PayPal” only after read-back.
+- AG Grid Community review grid (themeQuartz, 13px, row height 36) with checkbox selection, confidence number plus a thin bar, status pills, override dropdown, and green “Verified in PayPal” only after read-back. A mismatched postcode or country cell uses `#FEF2F2` plus a tooltip. The risk row has one red bar on the left selection column, not a full-row red fill. PayPal order ids longer than 12 characters render as the invoice id (tooltip keeps the PayPal id).
 - Sync via Orders v2 `POST /v2/checkout/orders/{id}/track`, fallback `POST /v1/shipping/trackers-batch`. Carrier map in `lib/carriers.ts` (`YUNEXPRESS`, `FOUR_PX_EXPRESS`, `YANWEN`, `CN_CHINA_POST_EMS`, `DHL`, `UPS`, `FEDEX`, `USPS`, otherwise `OTHER`).
 - Mock mode is stateless on the server. Orders are seeded from the fixed catalog. The browser keeps orders and trackers in `localStorage`. Sync and read-back send that state and get the next copy back. Read-back is true only when the tracking number is on the returned order. **Reset demo** clears `localStorage`. Sandbox and live mode stay on server-side REST.
-- After a verified sync, payments on hold count down and “Releasing early” counts up (release pending delivery), with a short highlight. Sample run: 10 → 2 on hold, $0.00 → $206.79 releasing early, 7.5 days earlier. Labels stay Simulated.
+- After a verified sync, payments on hold count down and “Releasing early” counts up, with a short green tint. Sample run: 10 → 2 on hold, $0.00 → $206.79 releasing early, 7.5 days earlier. “Simulated” is a muted tag. Disputes avoided (est.) is the synced count. Tracking coverage is synced/total.
 - Sandbox seed (`scripts/seed-sandbox.ts`) creates COMPLETED captures with `payment_source.card` and `PayPal-Request-Id`. The gitignored registry `.data/sandbox-orders.json` is what `GET /api/orders` lists, via `GET /v2/checkout/orders/{id}`. Transaction Search is not used. `scripts/capture.ts` finishes any order that still needs a buyer approval.
-- Buyer reply: Chinese brief + English draft with a labeled simulated timeline. Template when AI is off.
+- Buyer reply opens a 480px right drawer: order header, pasted email, Chinese explanation (source “Rules” when AI is off), English draft with Copy, and a vertical timeline. Esc or X closes it. Sync results use a small bottom-right toast.
 - `POST /api/agent`: Vercel AI SDK tools. In sandbox/live, `@paypal/agent-toolkit` `PayPalAgentToolkit` tools are registered when the package loads. Mock mode and toolkit failures use the direct client against the orders sent with the request. No LLM key runs the same sync deterministically.
 - `GET /api/health`, vitest tests, `scripts/verify.mjs`, `scripts/screenshot.mjs`.
 
@@ -25,7 +25,7 @@ Updated 2026-11-11 after a local mock-mode run.
 - Env precedence: `@next/env` `loadEnvConfig` keeps a process-environment value and fills only missing keys from `.env.local`, which beats `.env`. Confirmed on the running app: `PAYPAL_MODE=mock npm run start` with a sandbox `.env.local` returned `GET /api/health` `paypal=mock`. `npm run start` with no shell `PAYPAL_MODE` returned `paypal=sandbox`.
 - `PAYPAL_MODE=mock npm run start` on port 3000, then `node scripts/verify.mjs`: **ALL PASS**
   - health, seed reset, orders, parse sample manifests, match, sync, mock stateless (GET /api/orders does not remember the tracker), read-back (number present, missing number false, spoofed `verified: true` without the number is false), explicit risk-row sync, buyer-reply, screenshot without LLM, agent deterministic.
-- `node scripts/screenshot.mjs`: wrote `screenshots/hero.png`, `home.png`, `matched-grid.png`, `after-sync.png`, `synced.png`, `buyer-reply.png`, `chinese.png`. The shot waits until the count-up sets `data-settled="true"`. After sync the big “Releasing early” figure is `$206.79`, the same amount as the subline `$0.00 → $206.79`. Payments on hold show `10 → 2`. Each step has a check.
+- `node scripts/screenshot.mjs` at 1440×900: `screenshots/home.png`, `hero.png`, `matched-grid.png`, `after-sync.png`, `buyer-drawer.png`, `chinese.png`. Obsolete `buyer-reply.png` and `synced.png` are removed by the script. The after-sync shot waits until the count-up sets `data-settled="true"`. Releasing early is `$206.79`, matching `$0.00 → $206.79`. Payments on hold show `10 → 2`. The toast reads “8 tracking numbers verified in PayPal” and “1 skipped (address mismatch)”.
 
 ## Sandbox run
 
@@ -52,11 +52,30 @@ Real sandbox business app. Advanced Card Payments is on. Customer disputes and T
 - 10 orders, each `COMPLETED` with a capture id. Anna Schmidt’s PayPal postcode is `10115`. Noah Bennett has no order.
 - Sample manifests parsed (10 rows). Anna flagged red (Seller Protection). Micheal Obrien matched Michael O'Brien. Chloe Davis matched Chloe Davies. Noah unmatched.
 - Sync skipped Anna by default. Eight other manifest rows verified.
-- Carrier codes accepted on Orders v2 `POST /v2/checkout/orders/{id}/track` with no fallback: `YUNEXPRESS`, `FOUR_PX_EXPRESS`, `YANWEN`. No API error on those calls.
+- Re-push is idempotent. The latest verify treated tracking already on the order as success after read-back (`via=read_back`) for `YUNEXPRESS`, `FOUR_PX_EXPRESS`, and `YANWEN`. Requested and used carrier codes matched. No trackers-batch fallback.
 - Read-back found each tracking number on `GET /v2/checkout/orders/{id}` (`purchase_units[].shipping.trackers`). Anna’s number `YT202611110004` was not written.
-- `screenshots/sandbox-synced.png`: status chip `PayPal: sandbox`, 8 verified, Anna’s row red and skipped, releasing early `$206.79`, 2 still on hold (`$36.50`, Anna plus Ava). Sandbox “days released earlier” is 10.9 because `paidAt` is the PayPal create date (11 Nov 2026) while the catalog ship dates are earlier. The mock catalog’s paid dates sit closer to the ship dates, so that demo still averages 7.5.
+- `screenshots/sandbox-synced.png`: environment pill `Sandbox`, 8 verified, Anna’s row skipped with the postcode cell highlighted, Noah “No match”, releasing early `$206.79`, 2 still on hold (`$36.50`, Anna plus Ava). The Order column shows `INV-1001` style labels. There is no `10 → 2` delta on this shot because those orders were already tracked when the page loaded. Sandbox “days released earlier” is 10.9 because `paidAt` is the PayPal create date (11 Nov 2026) while the catalog ship dates are earlier. The mock catalog’s paid dates sit closer to the ship dates, so that demo still averages 7.5.
 
 GET order is retried on HTTP 429 and 5xx. A single dropped id during sync is fetched again before the row is marked missing.
+
+## Design review
+
+Reviewed the seven PNGs at 1440×900 after one fix round.
+
+Fixed in that round:
+
+- The risk row drew two red bars (pinned selection column and the center row). Only the left selection column keeps the 3px bar. Postcode `10117` and Address “Mismatch” stay on `#FEF2F2`.
+- The sync toast wrapped after the digit in “· 1”. It now breaks on the middot, so the two clauses are separate lines.
+- The drawer labeled the rules draft “Template”. It now says “Rules” / “规则”.
+- Sandbox PayPal order ids (~17 characters) were truncated in the Order and Override columns. Those cells show the invoice id when the PayPal id is longer than 12 characters. The full id stays on the tooltip.
+
+Left on purpose:
+
+- The drawer is a slide-over, so it covers the right KPI tiles and the right side of the grid. The overlay is a light scrim. The timeline starts on screen and continues below the 900px fold.
+- Under a 10-row grid the card still fills the viewport, so there is empty surface below the last row. The same region is the empty state before upload.
+- 中文 mode keeps the environment words Mock / Sandbox in English. CJK labels in the nav, KPIs, stepper, and grid are not clipped. Noto Sans CJK SC is installed on this machine; fonts are not committed.
+- “Micheal Obrien” next to “Michael O'Brien” is the sample name variant, not a clipped cell.
+- No purple gradients, glass, emoji, or marketing hero remain. The primary button is the only strong blue.
 
 ## Not verified
 

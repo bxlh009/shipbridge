@@ -306,7 +306,7 @@ export function isAlreadyTracked(payload: unknown): boolean {
   const parts = [body.name || "", body.message || ""];
   for (const detail of body.details || []) parts.push(detail.issue || "", detail.description || "");
   const blob = parts.join(" ").toUpperCase();
-  if (/ALREADY_ADDED|ALREADY_EXISTS|DUPLICATE_TRACK|TRACKING_INFO_ALREADY|TRACKER_ALREADY/.test(blob)) return true;
+  if (/ALREADY[\s_-]*(ADDED|EXIST)|DUPLICATE[\s_-]*TRACK|TRACKING[\s_-]*INFO[\s_-]*ALREADY|TRACKER[\s_-]*ALREADY/.test(blob)) return true;
   return blob.includes("ALREADY") && blob.includes("TRACK");
 }
 
