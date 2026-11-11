@@ -36,6 +36,9 @@ export function daysBetween(laterIso: string, earlierIso: string): number {
 
 export type HoldInsight = {
   onHold: boolean;
+  /** Verified tracker is on the order and the delivery estimate is still ahead. */
+  releasePending: boolean;
+  trackingVerified: boolean;
   daysEarlier: number;
   naturalRelease: string;
   earlyRelease: string;
@@ -44,16 +47,18 @@ export type HoldInsight = {
 };
 
 export function holdInsight(order: Order, now = new Date()): HoldInsight {
-  const verified = order.tracking.find((item) => item.verified);
-  const carrier = verified?.carrier || order.plannedCarrier || "YUNEXPRESS";
+  const verifiedTrack = order.tracking.find((item) => item.verified && item.trackingNumber);
+  const trackingVerified = Boolean(verifiedTrack);
+  const carrier = verifiedTrack?.carrier || order.plannedCarrier || "YUNEXPRESS";
   const transit = transitDays(carrier, order.country);
   const naturalRelease = addDays(order.paidAt, HOLD_DAYS);
   const earlyRelease = addDays(order.shipDate, transit + 1);
   const daysEarlier = Math.max(0, daysBetween(naturalRelease, earlyRelease));
-  const release = verified ? earlyRelease : naturalRelease;
   const today = now.toISOString().slice(0, 10);
   return {
-    onHold: today < release,
+    onHold: !trackingVerified && today < naturalRelease,
+    releasePending: trackingVerified && today < earlyRelease,
+    trackingVerified,
     daysEarlier,
     naturalRelease,
     earlyRelease,
@@ -65,25 +70,34 @@ export function holdInsight(order: Order, now = new Date()): HoldInsight {
 export function summarizeHolds(orders: Order[], now = new Date()): HoldStats {
   let onHoldCount = 0;
   let onHoldAmount = 0;
+  let releasingAmount = 0;
+  let releasePendingCount = 0;
   let days = 0;
   let syncedCount = 0;
   for (const order of orders) {
     const insight = holdInsight(order, now);
+    const amount = Number(order.amount) || 0;
     if (insight.onHold) {
       onHoldCount += 1;
-      onHoldAmount += Number(order.amount) || 0;
+      onHoldAmount += amount;
     }
-    days += insight.daysEarlier;
-    if (order.tracking.some((item) => item.verified)) syncedCount += 1;
+    if (insight.trackingVerified) {
+      syncedCount += 1;
+      releasingAmount += amount;
+      days += insight.daysEarlier;
+      if (insight.releasePending) releasePendingCount += 1;
+    }
   }
   const currency = orders[0]?.currency || "USD";
   return {
     totalOrders: orders.length,
     onHoldCount,
     onHoldAmount: Math.round(onHoldAmount * 100) / 100,
+    releasingAmount: Math.round(releasingAmount * 100) / 100,
+    releasePendingCount,
     currency,
     syncedCount,
-    estimatedDaysReleasedEarlier: orders.length ? Math.round((days / orders.length) * 10) / 10 : 0,
+    estimatedDaysReleasedEarlier: syncedCount ? Math.round((days / syncedCount) * 10) / 10 : 0,
     simulated: true,
   };
 }

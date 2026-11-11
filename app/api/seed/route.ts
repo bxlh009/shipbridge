@@ -1,17 +1,16 @@
 import { NextResponse } from "next/server";
-import { CATALOG } from "@/lib/paypal/catalog";
-import { resetMockOrders } from "@/lib/paypal/mock-store";
+import { summarizeHolds } from "@/lib/holds";
+import { CATALOG, freshOrders } from "@/lib/paypal/catalog";
 import { paypalMode } from "@/lib/paypal/mode";
 import { createSandboxOrder } from "@/lib/paypal/rest";
-import { summarizeHolds } from "@/lib/holds";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST() {
   if (paypalMode() === "mock") {
-    const orders = resetMockOrders();
-    return NextResponse.json({ ok: true, mode: "mock", orders, stats: summarizeHolds(orders) });
+    const orders = freshOrders();
+    return NextResponse.json({ ok: true, mode: "mock", orders, stats: summarizeHolds(orders), source: "catalog" });
   }
   try {
     const created = [];

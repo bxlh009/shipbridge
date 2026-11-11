@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { countryMismatch, postcodeMismatch } from "@/lib/matcher";
 import { mapCarrier } from "@/lib/carriers";
 import { dictionaries, type Locale } from "@/lib/i18n";
@@ -22,10 +22,22 @@ type Reply = {
   carrier: string | null;
 };
 
+type Impact = {
+  onHoldFrom: number;
+  onHoldTo: number;
+  releasingFrom: number;
+  releasingTo: number;
+  currency: string;
+};
+
+const MOCK_KEY = "shipbridge-mock-orders";
+
 const emptyStats: HoldStats = {
   totalOrders: 0,
   onHoldCount: 0,
   onHoldAmount: 0,
+  releasingAmount: 0,
+  releasePendingCount: 0,
   currency: "USD",
   syncedCount: 0,
   estimatedDaysReleasedEarlier: 0,
@@ -36,14 +48,74 @@ function money(amount: number, currency: string) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
 }
 
+function readMockOrders(): Order[] | null {
+  try {
+    const raw = window.localStorage.getItem(MOCK_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { orders?: Order[] } | Order[];
+    const orders = Array.isArray(parsed) ? parsed : parsed.orders;
+    if (!Array.isArray(orders) || !orders.length) return null;
+    return orders;
+  } catch {
+    return null;
+  }
+}
+
+function writeMockOrders(orders: Order[]) {
+  window.localStorage.setItem(MOCK_KEY, JSON.stringify({ orders }));
+}
+
+function clearMockOrders() {
+  window.localStorage.removeItem(MOCK_KEY);
+}
+
+function nearly(shown: number, target: number, decimals: number) {
+  const factor = 10 ** decimals;
+  return Math.round(shown * factor) === Math.round(target * factor);
+}
+
+function useCount(value: number, animate: boolean) {
+  const [shown, setShown] = useState(value);
+  const fromRef = useRef(value);
+  useEffect(() => {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!animate || reduce || fromRef.current === value) {
+      fromRef.current = value;
+      setShown(value);
+      return;
+    }
+    const from = fromRef.current;
+    const start = performance.now();
+    const duration = 900;
+    let frame = 0;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - (1 - t) ** 3;
+      setShown(from + (value - from) * eased);
+      if (t < 1) frame = requestAnimationFrame(step);
+      else {
+        fromRef.current = value;
+        setShown(value);
+      }
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [value, animate]);
+  return shown;
+}
+
 export default function AppShell() {
   const [locale, setLocale] = useState<Locale>("en");
   const copy = dictionaries[locale];
   const [health, setHealth] = useState<Health>({ paypal: "mock", ai: "off", model: null });
   const [orders, setOrders] = useState<Order[]>([]);
   const [stats, setStats] = useState<HoldStats>(emptyStats);
+  const statsRef = useRef(stats);
+  statsRef.current = stats;
   const [rows, setRows] = useState<GridRow[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+  const [matched, setMatched] = useState(false);
+  const [synced, setSynced] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -52,27 +124,83 @@ export default function AppShell() {
   const [reply, setReply] = useState<Reply | null>(null);
   const [copied, setCopied] = useState(false);
   const [agentText, setAgentText] = useState("");
+  const [impact, setImpact] = useState<Impact | null>(null);
+  const [motion, setMotion] = useState(false);
+  const [flash, setFlash] = useState(false);
 
   const riskCount = rows.filter((row) => row.addressRisk && row.matchedOrderId).length;
+  const loaded = rows.length > 0;
+  const currentStep = !loaded ? 1 : !matched ? 2 : !synced ? 3 : 0;
+  const idle = busy === "";
 
-  async function refreshOrders() {
+  function rememberOrders(next: Order[], paypalMode: string) {
+    setOrders(next);
+    if (paypalMode === "mock") writeMockOrders(next);
+  }
+
+  function revealStats(next: HoldStats) {
+    const prev = statsRef.current;
+    if (prev.totalOrders > 0 && (prev.onHoldCount !== next.onHoldCount || prev.releasingAmount !== next.releasingAmount || prev.syncedCount !== next.syncedCount)) {
+      setImpact({
+        onHoldFrom: prev.onHoldCount,
+        onHoldTo: next.onHoldCount,
+        releasingFrom: prev.releasingAmount,
+        releasingTo: next.releasingAmount,
+        currency: next.currency || prev.currency,
+      });
+      setMotion(true);
+      setFlash(true);
+    }
+    setStats(next);
+  }
+
+  async function applyClientOrders(stored: Order[]) {
+    const response = await fetch("/api/orders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orders: stored }),
+    });
+    const body = await response.json();
+    if (!body.ok) throw new Error(body.message || "Could not load PayPal orders");
+    rememberOrders(body.orders, body.paypal);
+    setStats(body.stats);
+  }
+
+  async function loadServerOrders() {
     const response = await fetch("/api/orders", { cache: "no-store" });
     const body = await response.json();
-    if (body.ok) {
-      setOrders(body.orders);
-      setStats(body.stats);
-    }
+    if (!body.ok) throw new Error(body.message || "Could not load PayPal orders");
+    rememberOrders(body.orders, body.paypal);
+    setStats(body.stats);
+    return body;
   }
 
   useEffect(() => {
     const stored = window.localStorage.getItem("shipbridge-locale");
     if (stored === "zh" || stored === "en") setLocale(stored);
-    refreshOrders().catch(() => setError("Could not load PayPal orders"));
-    fetch("/api/health", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((body) => setHealth(body))
-      .catch(() => undefined);
+    void (async () => {
+      try {
+        const healthBody = await fetch("/api/health", { cache: "no-store" }).then((response) => response.json());
+        setHealth(healthBody);
+        if (healthBody.paypal === "mock") {
+          const storedOrders = readMockOrders();
+          if (storedOrders) {
+            await applyClientOrders(storedOrders);
+            return;
+          }
+        }
+        await loadServerOrders();
+      } catch {
+        setError("Could not load PayPal orders");
+      }
+    })();
   }, []);
+
+  useEffect(() => {
+    if (!flash) return;
+    const timer = window.setTimeout(() => setFlash(false), 1400);
+    return () => window.clearTimeout(timer);
+  }, [flash]);
 
   function chooseLocale(next: Locale) {
     setLocale(next);
@@ -98,6 +226,14 @@ export default function AppShell() {
     });
   }
 
+  function takeManifest(manifest: ManifestRow[]) {
+    setRows(toGrid(manifest));
+    setSelected([]);
+    setMatched(false);
+    setSynced(false);
+    setNotice(`${manifest.length} ${copy.loaded}`);
+  }
+
   async function loadSample(sample: string) {
     setBusy("parse");
     setError("");
@@ -110,9 +246,7 @@ export default function AppShell() {
       });
       const body = await response.json();
       if (!body.ok) throw new Error(body.message || "Parse failed");
-      setRows(toGrid(body.rows));
-      setSelected([]);
-      setNotice(`${body.rows.length} ${copy.loaded}`);
+      takeManifest(body.rows);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Parse failed");
     } finally {
@@ -142,9 +276,7 @@ export default function AppShell() {
         setError(body.message || "Parse failed");
         return;
       }
-      setRows(toGrid(body.rows));
-      setSelected([]);
-      setNotice(`${body.rows.length} ${copy.loaded}`);
+      takeManifest(body.rows);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Parse failed");
     } finally {
@@ -159,11 +291,13 @@ export default function AppShell() {
       const response = await fetch("/api/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows }),
+        body: JSON.stringify({ rows, orders }),
       });
       const body = await response.json();
       if (!body.ok) throw new Error(body.message || "Match failed");
       setRows(body.rows);
+      setMatched(true);
+      setSynced(false);
       setNotice(`${body.rows.filter((row: GridRow) => row.matchedOrderId).length} matched`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Match failed");
@@ -194,6 +328,13 @@ export default function AppShell() {
     );
   }
 
+  function acceptSync(body: { rows?: GridRow[]; orders?: Order[]; stats?: HoldStats; paypal?: string; verified?: number }) {
+    if (Array.isArray(body.rows)) setRows(body.rows);
+    if (Array.isArray(body.orders)) rememberOrders(body.orders, body.paypal || health.paypal);
+    if (body.stats) revealStats(body.stats);
+    setSynced(true);
+  }
+
   async function sync() {
     setBusy("sync");
     setError("");
@@ -202,13 +343,12 @@ export default function AppShell() {
       const response = await fetch("/api/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: payload }),
+        body: JSON.stringify({ rows: payload, orders }),
       });
       const body = await response.json();
       if (!body.ok) throw new Error(body.message || "Sync failed");
-      setRows(body.rows);
+      acceptSync(body);
       setNotice(`${body.verified} verified in PayPal`);
-      await refreshOrders();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sync failed");
     } finally {
@@ -227,15 +367,13 @@ export default function AppShell() {
         body: JSON.stringify({
           instruction: "Sync tracking for these manifest rows. Skip Seller Protection risks unless the row is selected. Read each tracking number back.",
           rows: payload,
+          orders,
         }),
       });
       const body = await response.json();
       if (!body.ok) throw new Error(body.message || "Agent failed");
       setAgentText(body.text || "");
-      if (Array.isArray(body.rows) && body.rows.length && body.rows[0].syncStatus) {
-        setRows(body.rows);
-        await refreshOrders();
-      }
+      if (Array.isArray(body.rows) && body.rows.length && body.rows[0].syncStatus) acceptSync(body);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Agent failed");
     } finally {
@@ -245,14 +383,29 @@ export default function AppShell() {
 
   async function reset() {
     setBusy("reset");
-    await fetch("/api/seed", { method: "POST" });
+    clearMockOrders();
     setRows([]);
     setSelected([]);
+    setMatched(false);
+    setSynced(false);
     setReply(null);
     setAgentText("");
     setNotice("");
-    await refreshOrders();
-    setBusy("");
+    setImpact(null);
+    setMotion(false);
+    setFlash(false);
+    try {
+      const response = await fetch("/api/seed", { method: "POST" });
+      const body = await response.json();
+      if (body.mode === "mock" && Array.isArray(body.orders)) {
+        rememberOrders(body.orders, "mock");
+        setStats(body.stats);
+      } else if (body.ok) {
+        await loadServerOrders();
+      }
+    } finally {
+      setBusy("");
+    }
   }
 
   async function draft() {
@@ -263,7 +416,7 @@ export default function AppShell() {
       const response = await fetch("/api/buyer-reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, orderId: orderId || undefined }),
+        body: JSON.stringify({ email, orderId: orderId || undefined, orders }),
       });
       const body = await response.json();
       if (!body.ok) throw new Error(body.message || "Draft failed");
@@ -282,32 +435,52 @@ export default function AppShell() {
   }
 
   const aiLabel = useMemo(() => (health.ai && health.ai !== "off" ? `AI: ${health.model}` : copy.aiOff), [health, copy.aiOff]);
+  const onHoldDelta = impact ? `${impact.onHoldFrom} → ${impact.onHoldTo} ${copy.onHoldTrail}` : undefined;
+  const releasingDelta = impact ? `${money(impact.releasingFrom, impact.currency)} → ${money(impact.releasingTo, impact.currency)} ${copy.releasingTrail}` : undefined;
+  const releasingHint = stats.releasePendingCount > 0 ? `${copy.releasingHint} · ${copy.simulated}` : stats.syncedCount > 0 ? `${copy.releasedHint} · ${copy.simulated}` : copy.simulated;
 
   return (
     <div className="min-h-screen">
-      <header className="bg-gradient-to-r from-[#001a4d] via-[#003087] to-[#0070ba] text-white shadow-md">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-5">
-          <div className="flex items-center gap-3">
-            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-white/15 text-lg font-bold">SB</div>
-            <div>
+      <header data-testid="hero" className="bg-gradient-to-r from-[#001a4d] via-[#003087] to-[#0070ba] text-white shadow-md">
+        <div className="mx-auto max-w-7xl px-4 pb-8 pt-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="grid h-11 w-11 place-items-center rounded-2xl bg-white/15 text-lg font-bold">SB</div>
               <h1 className="text-2xl font-semibold tracking-tight">ShipBridge</h1>
-              <p className="text-sm text-blue-100">{copy.tagline}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-medium" data-testid="paypal-chip">
+                PayPal: {health.paypal}
+              </span>
+              <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-medium" data-testid="ai-chip">
+                {aiLabel}
+              </span>
+              <div className="ml-1 flex overflow-hidden rounded-full bg-white/15 text-xs">
+                <button type="button" data-testid="lang-en" className={`px-3 py-1 ${locale === "en" ? "bg-white text-[#003087]" : ""}`} onClick={() => chooseLocale("en")}>
+                  EN
+                </button>
+                <button type="button" data-testid="lang-zh" className={`px-3 py-1 ${locale === "zh" ? "bg-white text-[#003087]" : ""}`} onClick={() => chooseLocale("zh")}>
+                  中文
+                </button>
+              </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-medium" data-testid="paypal-chip">
-              PayPal: {health.paypal}
-            </span>
-            <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-medium" data-testid="ai-chip">
-              {aiLabel}
-            </span>
-            <div className="ml-1 flex overflow-hidden rounded-full bg-white/15 text-xs">
-              <button type="button" data-testid="lang-en" className={`px-3 py-1 ${locale === "en" ? "bg-white text-[#003087]" : ""}`} onClick={() => chooseLocale("en")}>
-                EN
-              </button>
-              <button type="button" data-testid="lang-zh" className={`px-3 py-1 ${locale === "zh" ? "bg-white text-[#003087]" : ""}`} onClick={() => chooseLocale("zh")}>
-                中文
-              </button>
+          <p data-testid="hero-pitch" className="mt-6 max-w-4xl text-xl font-medium leading-snug sm:text-2xl">
+            {copy.heroPitch}
+          </p>
+          <p className="mt-2 max-w-3xl text-sm text-blue-100 sm:text-base">{copy.heroSub}</p>
+          <div className="mt-6" data-testid="demo-steps">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-blue-100">{copy.stepGuide}</p>
+            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+              <DemoStep index={1} label={copy.stepLoad} active={currentStep === 1} done={loaded} disabled={!idle} onClick={() => void loadSample("all")} testId="step-load" />
+              <span className="hidden px-1 text-lg text-white/70 md:inline" aria-hidden>
+                →
+              </span>
+              <DemoStep index={2} label={copy.stepMatch} active={currentStep === 2} done={matched} disabled={!loaded || !idle} onClick={() => void match()} testId="step-match" />
+              <span className="hidden px-1 text-lg text-white/70 md:inline" aria-hidden>
+                →
+              </span>
+              <DemoStep index={3} label={copy.stepSync} active={currentStep === 3} done={synced} disabled={!matched || !idle} onClick={() => void sync()} testId="step-sync" />
             </div>
           </div>
         </div>
@@ -319,12 +492,53 @@ export default function AppShell() {
           <p>{copy.banner}</p>
         </div>
 
-        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <Stat label={copy.orders} value={String(stats.totalOrders)} testId="stat-orders" />
-          <Stat label={copy.onHold} value={String(stats.onHoldCount)} hint={copy.simulated} />
-          <Stat label={copy.amount} value={money(stats.onHoldAmount, stats.currency)} hint={copy.simulated} />
-          <Stat label={copy.synced} value={String(stats.syncedCount)} testId="stat-synced" />
-          <Stat label={copy.days} value={String(stats.estimatedDaysReleasedEarlier)} hint={copy.daysHint} />
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6" data-testid="impact-stats">
+          <Stat label={copy.orders} numeric={stats.totalOrders} decimals={0} format={(value) => String(Math.round(value))} testId="stat-orders" />
+          <Stat
+            label={copy.onHold}
+            numeric={stats.onHoldCount}
+            decimals={0}
+            format={(value) => String(Math.round(value))}
+            hint={copy.simulated}
+            testId="stat-on-hold"
+            delta={onHoldDelta}
+            deltaTestId="delta-on-hold"
+            animate={motion}
+            flash={flash}
+          />
+          <Stat
+            label={copy.amount}
+            numeric={stats.onHoldAmount}
+            decimals={2}
+            format={(value) => money(value, stats.currency)}
+            hint={copy.simulated}
+            testId="stat-amount"
+            animate={motion}
+            flash={flash}
+          />
+          <Stat
+            label={copy.releasing}
+            numeric={stats.releasingAmount}
+            decimals={2}
+            format={(value) => money(value, stats.currency)}
+            hint={releasingHint}
+            testId="stat-releasing"
+            delta={releasingDelta}
+            deltaTestId="delta-releasing"
+            animate={motion}
+            flash={flash}
+          />
+          <Stat label={copy.synced} numeric={stats.syncedCount} decimals={0} format={(value) => String(Math.round(value))} testId="stat-synced" animate={motion} flash={flash} />
+          <Stat
+            label={copy.days}
+            numeric={stats.estimatedDaysReleasedEarlier}
+            decimals={1}
+            format={(value) => value.toFixed(1)}
+            hint={copy.daysHint}
+            testId="stat-days"
+            animate={motion}
+            flash={flash}
+          />
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -334,16 +548,16 @@ export default function AppShell() {
               <p className="text-sm text-slate-500">{copy.uploadHint}</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button type="button" data-testid="use-sample" className="rounded-lg bg-[#003087] px-3 py-2 text-sm font-medium text-white" onClick={() => loadSample("all")}>
+              <button type="button" data-testid="use-sample" className="rounded-lg bg-[#003087] px-3 py-2 text-sm font-medium text-white" onClick={() => void loadSample("all")}>
                 {copy.useSample}
               </button>
-              <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={() => loadSample("yunexpress")}>
+              <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={() => void loadSample("yunexpress")}>
                 {copy.yun}
               </button>
-              <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={() => loadSample("4px")}>
+              <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={() => void loadSample("4px")}>
                 {copy.fourpx}
               </button>
-              <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={() => loadSample("yanwen")}>
+              <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={() => void loadSample("yanwen")}>
                 {copy.yanwen}
               </button>
               <label className="cursor-pointer rounded-lg border border-slate-200 px-3 py-2 text-sm">
@@ -385,7 +599,7 @@ export default function AppShell() {
               <button type="button" disabled={!rows.length || busy === "agent"} className="rounded-lg border border-[#003087] px-3 py-2 text-sm text-[#003087] disabled:opacity-50" onClick={() => void agent()}>
                 {copy.agent}
               </button>
-              <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={() => void reset()}>
+              <button type="button" data-testid="reset-demo" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={() => void reset()}>
                 {copy.reset}
               </button>
             </div>
@@ -482,15 +696,89 @@ export default function AppShell() {
   );
 }
 
-function Stat({ label, value, hint, testId }: { label: string; value: string; hint?: string; testId?: string }) {
+function Stat({
+  label,
+  numeric,
+  decimals,
+  format,
+  hint,
+  testId,
+  delta,
+  deltaTestId,
+  animate = false,
+  flash = false,
+}: {
+  label: string;
+  numeric: number;
+  decimals: number;
+  format: (value: number) => string;
+  hint?: string;
+  testId?: string;
+  delta?: string;
+  deltaTestId?: string;
+  animate?: boolean;
+  flash?: boolean;
+}) {
+  const shown = useCount(numeric, animate);
+  const settled = !animate || nearly(shown, numeric, decimals);
   return (
-    <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <article className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-sm ${flash ? "stat-flash" : ""}`}>
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-[#003087]" data-testid={testId}>
-        {value}
+      <p className="mt-1 text-2xl font-semibold tabular-nums text-[#003087]" data-testid={testId} data-settled={settled ? "true" : "false"}>
+        {format(shown)}
       </p>
+      {delta ? (
+        <p className="mt-1 text-xs font-semibold text-[#0070ba]" data-testid={deltaTestId}>
+          {delta}
+        </p>
+      ) : null}
       {hint ? <p className="mt-1 text-xs text-slate-400">{hint}</p> : null}
     </article>
+  );
+}
+
+function DemoStep({
+  index,
+  label,
+  active,
+  done,
+  disabled,
+  onClick,
+  testId,
+}: {
+  index: number;
+  label: string;
+  active: boolean;
+  done: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  testId: string;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      data-current={active ? "true" : "false"}
+      data-done={done ? "true" : "false"}
+      disabled={disabled}
+      onClick={onClick}
+      aria-current={active ? "step" : undefined}
+      className={`flex min-w-0 flex-1 items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${
+        disabled ? "cursor-not-allowed opacity-40" : "hover:bg-white/20"
+      } ${active ? "bg-white text-[#003087] shadow-lg" : "bg-white/10 text-white"}`}
+    >
+      <span
+        className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-sm ${
+          done ? "bg-emerald-400 text-emerald-950" : active ? "bg-[#003087] text-white" : "bg-white/20 text-white"
+        }`}
+        data-testid={`${testId}-mark`}
+      >
+        {done ? "✓" : index}
+      </span>
+      <span>
+        {index}. {label}
+      </span>
+    </button>
   );
 }
 

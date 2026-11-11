@@ -5,7 +5,7 @@ import { createSandboxOrder } from "../lib/paypal/rest";
 async function main() {
   if (paypalMode() === "mock") {
     console.log("PAYPAL_MODE=mock (or credentials are missing).");
-    console.log("Mock orders are already in memory when the app is running:");
+    console.log("Mock orders come from the fixed catalog. The browser keeps tracking in localStorage:");
     for (const order of CATALOG) {
       console.log(`  ${order.id}  ${order.buyerName}  ${order.postalCode} ${order.country}  ${order.invoiceId}`);
     }

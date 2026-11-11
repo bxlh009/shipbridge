@@ -17,3 +17,29 @@ select,
 textarea {
   font: inherit;
 }
+
+@keyframes stat-flash {
+  0% {
+    background-color: #ffffff;
+    box-shadow: 0 0 0 0 rgba(0, 112, 186, 0);
+  }
+  35% {
+    background-color: #e7f3ff;
+    box-shadow: 0 0 0 4px rgba(0, 112, 186, 0.28);
+  }
+  100% {
+    background-color: #ffffff;
+    box-shadow: 0 0 0 0 rgba(0, 112, 186, 0);
+  }
+}
+
+.stat-flash {
+  animation: stat-flash 1.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stat-flash {
+    animation: none;
+    background-color: #e7f3ff;
+  }
+}

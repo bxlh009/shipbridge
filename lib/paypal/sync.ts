@@ -1,15 +1,26 @@
+import { summarizeHolds } from "../holds";
 import { scorePair } from "../matcher";
-import { SELLER_PROTECTION_WARNING, type GridRow } from "../types";
-import { paypal } from "./gateway";
+import { SELLER_PROTECTION_WARNING, type GridRow, type HoldStats, type Order } from "../types";
+import { paypal, trackOrder } from "./gateway";
+import { coerceMockState } from "./mock-state";
 
 const AUTO_CONFIDENCE = 70;
 
-export async function syncRows(rows: GridRow[]): Promise<GridRow[]> {
-  const orders = await paypal.listOrders();
-  const anySelected = rows.some((row) => row.selected);
+export type SyncResult = {
+  rows: GridRow[];
+  orders: Order[] | null;
+  stats: HoldStats | null;
+};
+
+export async function syncRows(rows: GridRow[], clientOrders?: Order[] | null): Promise<SyncResult> {
+  const mock = paypal.mode() === "mock";
+  let state = mock ? coerceMockState(clientOrders && clientOrders.length ? { orders: clientOrders } : undefined) : null;
+  const liveOrders = state ? null : await paypal.listOrders();
   const results: GridRow[] = [];
+  const anySelected = rows.some((row) => row.selected);
 
   for (const row of rows) {
+    const orders = state ? state.orders : liveOrders || [];
     const order = orders.find((item) => item.id === row.matchedOrderId);
     if (!row.matchedOrderId || !order) {
       results.push({ ...row, syncStatus: row.trackingNumber ? "skipped" : "idle", syncMessage: row.matchedOrderId ? "Order not found" : "No matched order" });
@@ -43,13 +54,18 @@ export async function syncRows(rows: GridRow[]): Promise<GridRow[]> {
     }
 
     try {
-      const written = await paypal.addTracking({
-        orderId: order.id,
-        captureId: order.captureId,
-        trackingNumber: row.trackingNumber,
-        carrier: row.paypalCarrier || row.carrier,
-        carrierNameOther: row.carrierNameOther,
-      });
+      const tracked = await trackOrder(
+        {
+          orderId: order.id,
+          captureId: order.captureId,
+          trackingNumber: row.trackingNumber,
+          carrier: row.paypalCarrier || row.carrier,
+          carrierNameOther: row.carrierNameOther,
+        },
+        state,
+      );
+      if (tracked.state) state = tracked.state;
+      const written = tracked.result;
       if (!written.ok) {
         results.push({ ...row, addressRisk, syncStatus: "failed", syncMessage: written.error || "PayPal rejected the tracker" });
         continue;
@@ -75,5 +91,7 @@ export async function syncRows(rows: GridRow[]): Promise<GridRow[]> {
       results.push({ ...row, addressRisk, syncStatus: "failed", syncMessage: message });
     }
   }
-  return results;
+
+  const orders = state ? state.orders : null;
+  return { rows: results, orders, stats: orders ? summarizeHolds(orders) : null };
 }

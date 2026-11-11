@@ -56,10 +56,12 @@ async function main() {
     pass("parse sample manifests");
   } else fail("parse sample manifests", `rows ${rows.length}`);
 
+  let ordersState = seed.body.orders;
+
   const matched = await request("/api/match", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rows }),
+    body: JSON.stringify({ rows, orders: ordersState }),
   });
   const matchedRows = matched.body.rows || [];
   const anna = matchedRows.find((row) => row.recipientName === "Anna Schmidt");
@@ -79,37 +81,75 @@ async function main() {
   const synced = await request("/api/sync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rows: matchedRows.map((row) => ({ ...row, selected: false })) }),
+    body: JSON.stringify({ rows: matchedRows.map((row) => ({ ...row, selected: false })), orders: ordersState }),
   });
   const syncedRows = synced.body.rows || [];
   const emilySync = syncedRows.find((row) => row.trackingNumber === "YT202611110001");
   const annaSync = syncedRows.find((row) => row.recipientName === "Anna Schmidt");
-  if (emilySync?.syncStatus === "verified" && String(emilySync.syncMessage).includes("verified in PayPal") && annaSync?.syncStatus === "skipped") {
+  if (emilySync?.syncStatus === "verified" && String(emilySync.syncMessage).includes("verified in PayPal") && annaSync?.syncStatus === "skipped" && synced.body.orders?.length === 10) {
     pass("sync");
   } else fail("sync", `emily ${emilySync?.syncStatus} anna ${annaSync?.syncStatus} ${annaSync?.syncMessage || ""}`);
+  ordersState = synced.body.orders || ordersState;
 
-  const readBack = await request("/api/orders");
+  const memory = await request("/api/orders");
+  const memoryEmily = (memory.body.orders || []).find((order) => order.id === "SB-1001");
+  const memoryNumbers = (memoryEmily?.tracking || []).map((item) => item.trackingNumber);
+  if (memory.status === 200 && memory.body.source === "catalog" && !memoryNumbers.includes("YT202611110001")) pass("mock stateless");
+  else fail("mock stateless", memoryNumbers.join(",") || "server kept tracking");
+
+  const readBack = await request("/api/orders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ orders: ordersState, readBack: { orderId: "SB-1001", trackingNumber: "YT202611110001" } }),
+  });
+  const missing = await request("/api/orders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ orders: ordersState, readBack: { orderId: "SB-1001", trackingNumber: "NOT-ON-THE-ORDER" } }),
+  });
+  const spoof = (ordersState || []).map((order) =>
+    order.id === "SB-1001"
+      ? { ...order, tracking: [{ trackingNumber: "SPOOF", carrier: "YUNEXPRESS", status: "SHIPPED", verified: true }] }
+      : order,
+  );
+  const spoofed = await request("/api/orders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ orders: spoof, readBack: { orderId: "SB-1001", trackingNumber: "YT202611110001" } }),
+  });
   const emilyOrder = (readBack.body.orders || []).find((order) => order.id === "SB-1001");
   const numbers = (emilyOrder?.tracking || []).map((item) => item.trackingNumber);
-  if (numbers.includes("YT202611110001") && emilyOrder.tracking.some((item) => item.verified)) pass("read-back");
-  else fail("read-back", numbers.join(",") || "missing");
+  if (
+    numbers.includes("YT202611110001") &&
+    emilyOrder.tracking.some((item) => item.verified) &&
+    readBack.body.readBack?.verified === true &&
+    missing.body.readBack?.verified === false &&
+    spoofed.body.readBack?.verified === false
+  ) {
+    pass("read-back");
+  } else {
+    fail("read-back", JSON.stringify({ numbers, verified: readBack.body.readBack, missing: missing.body.readBack, spoofed: spoofed.body.readBack }));
+  }
 
   const risky = await request("/api/sync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       rows: syncedRows.map((row) => ({ ...row, selected: row.recipientName === "Anna Schmidt" })),
+      orders: ordersState,
     }),
   });
   const annaForced = (risky.body.rows || []).find((row) => row.recipientName === "Anna Schmidt");
   if (annaForced?.syncStatus === "verified") pass("sync explicit risk row");
   else fail("sync explicit risk row", annaForced?.syncStatus || "missing");
+  ordersState = risky.body.orders || ordersState;
 
   const reply = await request("/api/buyer-reply", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       email: "Where is my order?? Order SB-1001. This is Emily Carter and I may open a dispute.",
+      orders: ordersState,
     }),
   });
   const chinese = `${reply.body.chinese?.summary || ""}`;
@@ -139,6 +179,7 @@ async function main() {
     body: JSON.stringify({
       instruction: "sync tracking for these rows",
       rows: matchedRows.filter((row) => row.trackingNumber === "YW202611110006").map((row) => ({ ...row, selected: true })),
+      orders: ordersState,
     }),
   });
   if (agent.body.ok && /YW202611110006/.test(agent.body.text || "") && /mock|direct|deterministic/i.test(`${agent.body.engine} ${agent.body.toolkit}`)) {

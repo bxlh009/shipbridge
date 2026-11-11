@@ -65,6 +65,10 @@ export type HoldStats = {
   totalOrders: number;
   onHoldCount: number;
   onHoldAmount: number;
+  /** Amount whose verified tracking moved it off the 21-day hold. */
+  releasingAmount: number;
+  /** Verified tracking, still before the estimated delivery release. */
+  releasePendingCount: number;
   currency: string;
   syncedCount: number;
   estimatedDaysReleasedEarlier: number;

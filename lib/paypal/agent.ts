@@ -1,19 +1,21 @@
 import { generateText, stepCountIs, tool, type ToolSet } from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { z } from "zod";
-import type { GridRow } from "../types";
+import { summarizeHolds } from "../holds";
+import type { GridRow, Order } from "../types";
 import { llmConfig } from "./mode";
-import { paypal } from "./gateway";
+import { paypal, trackOrder } from "./gateway";
+import { coerceMockState, findMockOrder, type MockState } from "./mock-state";
 import { syncRows } from "./sync";
 
 type ToolMap = ToolSet;
 
-function localTools(): ToolMap {
+function localTools(scratch: { state: MockState | null }): ToolMap {
   return {
     get_order: tool({
       description: "Get a PayPal order by id, including shipping address, capture id, and any tracking already stored.",
       inputSchema: z.object({ orderId: z.string() }),
-      execute: async ({ orderId }) => paypal.getOrder(orderId),
+      execute: async ({ orderId }) => (scratch.state ? findMockOrder(scratch.state, orderId) : paypal.getOrder(orderId)),
     }),
     create_shipment_tracking: tool({
       description:
@@ -24,15 +26,18 @@ function localTools(): ToolMap {
         carrier: z.string().describe("PayPal carrier code such as YUNEXPRESS, FOUR_PX_EXPRESS, YANWEN, or OTHER"),
         carrierNameOther: z.string().optional(),
       }),
-      execute: async ({ orderId, trackingNumber, carrier, carrierNameOther }) =>
-        paypal.addTracking({ orderId, trackingNumber, carrier, carrierNameOther }),
+      execute: async ({ orderId, trackingNumber, carrier, carrierNameOther }) => {
+        const tracked = await trackOrder({ orderId, trackingNumber, carrier, carrierNameOther }, scratch.state);
+        if (tracked.state) scratch.state = tracked.state;
+        return tracked.result;
+      },
     }),
     get_shipment_tracking: tool({
       description: "Read back whether a tracking number is present on a PayPal order.",
       inputSchema: z.object({ orderId: z.string(), trackingNumber: z.string() }),
       execute: async ({ orderId, trackingNumber }) => {
-        const verified = await paypal.readBack(orderId, trackingNumber);
-        const order = await paypal.getOrder(orderId);
+        const verified = await paypal.readBack(orderId, trackingNumber, scratch.state);
+        const order = scratch.state ? findMockOrder(scratch.state, orderId) : await paypal.getOrder(orderId);
         return { verified, tracking: order?.tracking || [] };
       },
     }),
@@ -41,7 +46,7 @@ function localTools(): ToolMap {
 
 async function toolkitTools(): Promise<{ tools: ToolMap; note: string }> {
   if (paypal.mode() === "mock") {
-    return { tools: {}, note: "Agent toolkit is not called in mock mode. Local tools use the in-memory PayPal store." };
+    return { tools: {}, note: "Agent toolkit is not called in mock mode. Local tools update the mock orders sent with this request." };
   }
   try {
     const imported = (await import("@paypal/agent-toolkit/ai-sdk")) as {
@@ -94,20 +99,25 @@ function summarize(rows: GridRow[]): string {
     .join("\n");
 }
 
-export async function runAgent(instruction: string, rows: GridRow[]) {
+export async function runAgent(instruction: string, rows: GridRow[], clientOrders?: Order[] | null) {
+  const scratch = {
+    state: paypal.mode() === "mock" ? coerceMockState(clientOrders && clientOrders.length ? { orders: clientOrders } : undefined) : null,
+  };
   const loaded = await toolkitTools();
-  const tools = { ...localTools(), ...loaded.tools };
+  const tools = { ...localTools(scratch), ...loaded.tools };
   const cfg = llmConfig();
   if (!cfg.on || !cfg.model) {
-    const synced = rows.length ? await syncRows(rows) : [];
+    const synced = rows.length ? await syncRows(rows, clientOrders) : { rows: [] as GridRow[], orders: scratch.state?.orders ?? null, stats: scratch.state ? summarizeHolds(scratch.state.orders) : null };
     return {
       ok: true,
       engine: "deterministic",
       toolkit: loaded.note,
       text: rows.length
-        ? `${summarize(synced)}\n\nNo LLM key is configured, so Agent mode ran the same sync tools directly.`
+        ? `${summarize(synced.rows)}\n\nNo LLM key is configured, so Agent mode ran the same sync tools directly.`
         : "No rows were provided. Pass manifest rows or configure an LLM to let the agent call PayPal tools.",
-      rows: synced,
+      rows: synced.rows,
+      orders: synced.orders,
+      stats: synced.stats,
     };
   }
 
@@ -142,16 +152,26 @@ export async function runAgent(instruction: string, rows: GridRow[]) {
         })),
       )}`,
     });
-    return { ok: true, engine: "ai-sdk", toolkit: loaded.note, text: result.text, rows };
+    return {
+      ok: true,
+      engine: "ai-sdk",
+      toolkit: loaded.note,
+      text: result.text,
+      rows,
+      orders: scratch.state?.orders ?? null,
+      stats: scratch.state ? summarizeHolds(scratch.state.orders) : null,
+    };
   } catch (error) {
-    const synced = rows.length ? await syncRows(rows) : [];
+    const synced = rows.length ? await syncRows(rows, clientOrders) : { rows: [] as GridRow[], orders: null, stats: null };
     const message = error instanceof Error ? error.message : "agent failed";
     return {
       ok: true,
       engine: "deterministic-fallback",
       toolkit: loaded.note,
-      text: `The LLM agent failed (${message}). Direct sync result:\n${summarize(synced)}`,
-      rows: synced,
+      text: `The LLM agent failed (${message}). Direct sync result:\n${summarize(synced.rows)}`,
+      rows: synced.rows,
+      orders: synced.orders,
+      stats: synced.stats,
     };
   }
 }
