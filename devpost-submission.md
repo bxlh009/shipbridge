@@ -33,7 +33,7 @@ The desk also drafts buyer replies: paste an English “where is my order” ema
 
 A mock mode ships with ten fake SAMPLE orders and sample manifests so judges can run the full path without credentials: Load sample → Run matching → Push tracking. Sandbox mode uses real PayPal REST against seeded sandbox captures. Holds and “days released earlier” are labeled Simulated, because the PayPal sandbox does not place real 21-day holds. No real customer data is included.
 
-Complete setup and run instructions are in the repository README, including a 2.5-minute demo script. MIT licensed.
+The hosted demo at https://shipbridge-chi.vercel.app runs mock mode with live AI (OpenRouter free models: ERNIE for text, Nemotron VL for screenshots), falling back to rules if the model is slow or rate-limited. The demo video was recorded with AI off, so it shows the rules path. Complete setup and run instructions are in the repository README, including a 2.5-minute demo script. MIT licensed.
 
 ## How PayPal is used
 
@@ -62,9 +62,9 @@ YouTube transcoding can take hours. Upload early. After the deadline, do not cha
 
 ## Links to fill in later
 
-- Public repo: (create `https://github.com/bxlh009/shipbridge`, MIT license file at the repo root so GitHub detects it in About)
-- Hosted demo URL: (optional if README run instructions are complete; a public Vercel deploy still helps judges)
-- YouTube URL: (public, under 3 minutes)
+- Public repo: https://github.com/bxlh009/shipbridge
+- Hosted demo URL: https://shipbridge-chi.vercel.app
+- YouTube URL: https://youtu.be/uD9wnbEXHtY
 
 ## After you enter the submission
 
