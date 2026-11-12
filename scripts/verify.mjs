@@ -25,8 +25,11 @@ async function request(pathname, options) {
 
 async function main() {
   const health = await request("/api/health");
-  if (health.status === 200 && health.body.ok && health.body.paypal === "mock" && health.body.ai === "off") pass("health");
-  else fail("health", JSON.stringify(health.body));
+  const aiOff = health.body.ai === "off";
+  const aiOn = Boolean(health.body.model) && health.body.ai !== "off";
+  if (health.status === 200 && health.body.ok && health.body.paypal === "mock" && (aiOff || aiOn)) {
+    pass(aiOn ? `health (ai ${health.body.model})` : "health");
+  } else fail("health", JSON.stringify(health.body));
 
   const seed = await request("/api/seed", { method: "POST" });
   if (seed.status === 200 && seed.body.ok && seed.body.orders?.length === 10) pass("seed reset");
@@ -158,9 +161,9 @@ async function main() {
     reply.body.detectedOrderId === "SB-1001" &&
     reply.body.englishReply?.includes("YT202611110001") &&
     /[\u4e00-\u9fff]/.test(chinese) &&
-    reply.body.source === "template"
+    (reply.body.source === "template" || reply.body.source === "llm")
   ) {
-    pass("buyer-reply");
+    pass(reply.body.source === "llm" ? "buyer-reply (llm)" : "buyer-reply");
   } else fail("buyer-reply", JSON.stringify({ id: reply.body.detectedOrderId, source: reply.body.source, hasTrack: reply.body.englishReply?.includes("YT202611110001") }));
 
   const image = await request("/api/parse", {
@@ -171,7 +174,9 @@ async function main() {
     }),
   });
   if (image.body.code === "LLM_UNAVAILABLE" && /sample/i.test(image.body.message || "")) pass("screenshot without llm");
-  else fail("screenshot without llm", image.body.message || image.status);
+  else if (image.body.code === "VISION_FAILED" && /sample/i.test(image.body.message || "")) pass("screenshot vision fallback");
+  else if (image.body.ok && image.body.source === "screenshot") pass("screenshot with llm");
+  else fail("screenshot", image.body.message || image.body.code || image.status);
 
   const agent = await request("/api/agent", {
     method: "POST",

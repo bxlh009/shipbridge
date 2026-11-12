@@ -5,6 +5,7 @@ import { parseManifestImage } from "@/lib/vision";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 const SAMPLES = new Set(["yunexpress", "4px", "yanwen", "all"]);
 
